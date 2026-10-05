@@ -8,7 +8,7 @@ BKN = 62  # % Bedeckung ab der eine Schicht als Ceiling zählt (5/8)
 CONFIDENCE = 0.8  # Höhenband soll in 80 % der Member wolkenfrei sein
 
 
-def _hour_index(times, eta):
+def hour_index(times, eta):
     target = eta.replace(minute=0, second=0, microsecond=0, tzinfo=None)
     if eta.minute >= 30:
         target += dt.timedelta(hours=1)
@@ -67,7 +67,7 @@ def assess(points, wx, minima):
     point_results = []
     for p, w in zip(points, wx):
         h = w["hourly"]
-        idx = _hour_index(h["time"], p.eta)
+        idx = hour_index(h["time"], p.eta)
         if idx is None:
             point_results.append({"point": p, "fail_pct": None, "reasons": {}})
             continue

@@ -7,7 +7,7 @@ import requests
 import yaml
 
 NM_KM = 1.852
-SAMPLE_NM = 20  # Abstand der Stützpunkte entlang der Strecke
+SAMPLE_NM = 5  # Standard-Abstand der Stützpunkte entlang der Strecke (im Flugplan: sample_nm)
 
 DEFAULT_MINIMA = {
     "vis_m": 5000,          # Mindestsicht
@@ -27,6 +27,9 @@ class Point:
     lon: float
     eta: dt.datetime
     alt_ft: float
+    dist: float = 0.0      # NM ab Abflug
+    waypoint: bool = False
+    leg: int = 0           # Index des Streckenabschnitts
 
 
 def load_flight(path):
@@ -68,18 +71,27 @@ def dist_nm(a, b):
     return 2 * 6371 * math.asin(math.sqrt(h)) / NM_KM
 
 
+def course(a, b):
+    """Rechtweisender Kurs a->b in Grad."""
+    la1, lo1, la2, lo2 = map(math.radians, (a["lat"], a["lon"], b["lat"], b["lon"]))
+    y = math.sin(lo2 - lo1) * math.cos(la2)
+    x = math.cos(la1) * math.sin(la2) - math.sin(la1) * math.cos(la2) * math.cos(lo2 - lo1)
+    return math.degrees(math.atan2(y, x)) % 360
+
+
 def sample(fl):
-    """Stützpunkte alle ~SAMPLE_NM NM, ETA aus TAS (ohne Windkorrektur)."""
-    wps, tas = fl["waypoints"], fl["tas_kt"]
-    t = fl["departure"]
-    pts = [Point(wps[0]["name"], wps[0]["lat"], wps[0]["lon"], t, wps[0]["alt_ft"])]
-    for a, b in zip(wps, wps[1:]):
+    """Stützpunkte alle ~sample_nm NM, ETA aus TAS (ohne Windkorrektur)."""
+    wps, tas, step = fl["waypoints"], fl["tas_kt"], fl.get("sample_nm", SAMPLE_NM)
+    t, total = fl["departure"], 0.0
+    pts = [Point(wps[0]["name"], wps[0]["lat"], wps[0]["lon"], t, wps[0]["alt_ft"], 0.0, True)]
+    for leg, (a, b) in enumerate(zip(wps, wps[1:])):
         d = dist_nm(a, b)
-        n = max(1, math.ceil(d / SAMPLE_NM))
+        n = max(1, math.ceil(d / step))
         for i in range(1, n + 1):
             f = i / n
-            name = b["name"] if i == n else f"{a['name']}→{b['name']} {f * d:.0f}NM"
+            name = b["name"] if i == n else f"{a['name']}→{b['name']} +{f * d:.0f}NM"
             pts.append(Point(name, a["lat"] + f * (b["lat"] - a["lat"]), a["lon"] + f * (b["lon"] - a["lon"]),
-                             t + dt.timedelta(hours=f * d / tas), b["alt_ft"]))
+                             t + dt.timedelta(hours=f * d / tas), b["alt_ft"], total + f * d, i == n, leg))
         t += dt.timedelta(hours=d / tas)
+        total += d
     return pts

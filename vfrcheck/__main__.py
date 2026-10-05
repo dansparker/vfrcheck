@@ -10,9 +10,10 @@ import os
 import sys
 from pathlib import Path
 
-from . import assess, gramet, notify, route, weather
+from . import assess, chart, gramet, notify, route, section, weather
 
 STATE_DIR = Path("state")
+ENS_NM = 15  # Abstand der Ensemble-Abfragen
 BRIEFING_BEFORE = dt.timedelta(hours=2)
 BRIEFING_WINDOW = dt.timedelta(minutes=50)  # Toleranz, da der Cron nur stündlich (und oft verspätet) läuft
 
@@ -33,7 +34,7 @@ def altitudes(fl, res):
     lines = ["Mögliche Flughöhen (MSL, 80 % sicher unter tiefer Bewölkung):"]
     if lo <= hi:
         lines.append(f"- ganze Strecke: {_ft(lo)} bis {_ft(hi)}"
-                     + ("" if lo <= fl["cruise_alt_ft"] <= hi else f"  ⚠ geplante {fl['cruise_alt_ft']} ft liegt außerhalb"))
+                     + ("" if lo <= fl["cruise_alt_ft"] <= hi else f"  ⚠ geplante {fl['cruise_alt_ft']} ft liegt außerhalb (Gelände/Wolken)"))
     else:
         lines.append("- KEIN durchgehendes Höhenband – Abschnitte:")
     for r in res["points"]:
@@ -47,24 +48,77 @@ def altitudes(fl, res):
     return lines
 
 
-def report(fl, res, metars):
+def leg_lines(legs):
+    lines = ["Streckenabschnitte (Wind auf Planhöhe, ICON):"]
+    for lg in legs:
+        t = f"- {lg['name']}: {lg['dist']:.0f} NM, Kurs {lg['course']:03.0f}°, {lg['alt']} ft"
+        if lg["wind"]:
+            side = "rechts" if lg["cross"] >= 0 else "links"
+            t += (f" | Wind {lg['wind'][0]:03.0f}°/{lg['wind'][1]:.0f} kt (max {lg['max_wind']:.0f}), "
+                  f"{'Gegenwind' if lg['head'] >= 0 else 'Rückenwind'} {abs(lg['head']):.0f} kt, "
+                  f"Seitenwind {abs(lg['cross']):.0f} kt von {side}, GS {lg['gs']:.0f} kt"
+                  + (f", {lg['ete_min']:.0f} min" if lg["ete_min"] else ""))
+        if lg["freezing_ft"]:
+            t += f" | 0 °C {_ft(lg['freezing_ft'])}"
+        if lg["icing_ft"]:
+            t += f" | ⚠ Vereisung ab {_ft(lg['icing_ft'])}"
+        lines.append(t)
+    return lines + [""]
+
+
+def problem_segments(res, legs, threshold=10):
+    """Benachbarte kritische Stützpunkte zu Abschnitten zusammenfassen."""
+    segs, cur = [], []
+    for r in res["points"] + [{"fail_pct": None}]:
+        if r["fail_pct"] and r["fail_pct"] >= threshold:
+            cur.append(r)
+        elif cur:
+            worst = max(cur, key=lambda r: r["fail_pct"])
+            segs.append((cur[0]["point"], cur[-1]["point"], worst))
+            cur = []
+    lines = []
+    for a, b, w in sorted(segs, key=lambda s: -s[2]["fail_pct"])[:8]:
+        where = legs[a.leg]["name"] if legs else a.name
+        why = ", ".join(f"{k} {v:.0f}%" for k, v in list(w["reasons"].items())[:3])
+        lines.append(f"- {where}, NM {a.dist:.0f}–{b.dist:.0f} ({a.eta:%H:%M}–{b.eta:%H:%M}Z): "
+                     f"bis {w['fail_pct']:.0f}% kritisch – {why}")
+    return lines
+
+
+def report(fl, res, metars, legs=()):
     p = res["probability"]
     lines = [f"Flug {fl['name']} – Abflug {fl['departure']:%Y-%m-%d %H:%M} UTC, {fl['cruise_alt_ft']} ft",
              f"VFR-Wahrscheinlichkeit: {p:.0f}% ({category(p)}), {res['members']} Ensemble-Member"
              if p is not None else "Außerhalb des Vorhersagezeitraums (max. ~15 Tage)", ""]
     lines += altitudes(fl, res)
-    problems = [r for r in res["points"] if r["fail_pct"]]
+    if legs:
+        lines += leg_lines(legs)
+    problems = problem_segments(res, legs)
     if problems:
-        lines.append("Mögliche Probleme entlang der Strecke:")
-        for r in sorted(problems, key=lambda r: -r["fail_pct"])[:10]:
-            why = ", ".join(f"{k} {v:.0f}%" for k, v in list(r["reasons"].items())[:3])
-            lines.append(f"- {r['point'].name} ({r['point'].eta:%H:%M}Z): {r['fail_pct']:.0f}% kritisch – {why}")
-        lines.append("")
+        lines += ["Mögliche Probleme entlang der Strecke:"] + problems + [""]
     for icao, d in metars.items():
         for kind in ("metar", "taf"):
             if d.get(kind):
                 lines.append(d[kind])
     return "\n".join(lines)
+
+
+def ensemble_for(points, sec):
+    """Ensembles (~25 km Gitter) nur alle ~ENS_NM abfragen und auf die dichten Stützpunkte verteilen;
+    Geländehöhe kommt aus dem feineren Modell (ICON-D2)."""
+    idx = [0]
+    for i, p in enumerate(points):
+        if p.dist - points[idx[-1]].dist >= ENS_NM or (i == len(points) - 1 and i != idx[-1]):
+            idx.append(i)
+    wx = weather.ensemble([points[i] for i in idx])
+    out = []
+    for i, p in enumerate(points):
+        j = min(range(len(idx)), key=lambda k: abs(points[idx[k]].dist - p.dist))
+        w = dict(wx[j])
+        if sec and sec[i].get("elevation") is not None:
+            w["elevation"] = sec[i]["elevation"]
+        out.append(w)
+    return out
 
 
 def run(path, args):
@@ -75,10 +129,24 @@ def run(path, args):
         print(f"{fl['name']}: Abflug liegt in der Vergangenheit – übersprungen")
         return None
     points = route.sample(fl)
-    res = assess.assess(points, weather.ensemble(points), fl["minima"])
+    try:
+        sec = weather.section(points)
+    except Exception as e:
+        print(f"Vertikalschnitt nicht verfügbar: {e}")
+        sec = None
+    profs = section.profiles(points, sec) if sec else [None] * len(points)
+    res = assess.assess(points, ensemble_for(points, sec), fl["minima"])
     icaos = [w["icao"] for w in fl["waypoints"] if w.get("icao")]
-    text = report(fl, res, weather.metar_taf(icaos))
+    legs = section.legs(fl, points, profs)
+    text = report(fl, res, weather.metar_taf(icaos), legs)
     print(text, "\n")
+    png = chart.render(fl, points, res, profs, legs)
+    Path("charts").mkdir(exist_ok=True)
+    (Path("charts") / f"{Path(path).stem}.png").write_bytes(png)
+
+    def images():
+        g = gramet.fetch(fl, points)
+        return [("querschnitt.png", png)] + ([("gramet.png", g)] if g else [])
 
     state_file = STATE_DIR / f"{Path(path).stem}.json"
     old = json.loads(state_file.read_text()) if state_file.exists() else {}
@@ -95,9 +163,8 @@ def run(path, args):
         reason = "Manuell ausgelöst"
 
     if reason and not args.dry_run:
-        img = gramet.fetch(fl, points)
         subj = f"VFR {fl['name']}: {p:.0f}% {category(p)} ({reason})" if p is not None else f"VFR {fl['name']}"
-        print("Gesendet über:", notify.send(subj, text, img) or "keinen Kanal (nicht konfiguriert)")
+        print("Gesendet über:", notify.send(subj, text, images()) or "keinen Kanal (nicht konfiguriert)")
     state = dict(old)
     if p is not None and (reason or old_p is None):
         state.update(probability=p, updated=now.isoformat())
@@ -107,7 +174,7 @@ def run(path, args):
     if (args.briefing or (abs(to_dep - BRIEFING_BEFORE) <= BRIEFING_WINDOW and not old.get("briefing_sent")))             and not args.dry_run:
         subj = f"Briefing {fl['name']} – Abflug {fl['departure']:%H:%M} UTC" + (
             f": {p:.0f}% {category(p)}" if p is not None else "")
-        if notify.email(subj, text, gramet.fetch(fl, points)):
+        if notify.email(subj, text, images()):
             state["briefing_sent"] = now.isoformat()
             print("Briefing-Mail gesendet")
 

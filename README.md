@@ -5,7 +5,7 @@ Prüft anhand eines Flugplans, wie wahrscheinlich ein Flug unter **VFR-Bedingung
 ## So funktioniert es
 
 1. Flugplan in `flights/*.yaml` (Wegpunkte als ICAO-Code oder lat/lon, Abflugzeit, TAS, Reiseflughöhe, persönliche Minima).
-2. Die Strecke wird alle ~20 NM in Stützpunkte zerlegt, jeder bekommt eine ETA.
+2. Die Strecke wird alle **5 NM** (`sample_nm` im Flugplan) in Stützpunkte zerlegt, jeder bekommt eine ETA. Ensembles (~25 km Gitter) werden alle ~15 NM abgefragt, Gelände/Wolkenschnitt/Wind dicht aus **ICON-D2** (2 km).
 3. Für jeden Punkt werden **Ensemble-Vorhersagen** von [Open-Meteo](https://open-meteo.com) abgefragt (kostenlos):
    - **ICON-EPS** (DWD, ~40 Member) und **ECMWF-ENS** (~51 Member), zusammen rund 90 Szenarien
    - Sicht, tiefe Bewölkung, Wolkenbasis (geschätzt über die Taupunktdifferenz), Böen, Niederschlag, CAPE
@@ -15,7 +15,9 @@ Prüft anhand eines Flugplans, wie wahrscheinlich ein Flug unter **VFR-Bedingung
 6. **METAR/TAF** der Flugplätze (aviationweather.gov) und optional ein **GRAMET**-Querschnitt (autorouter) werden mitgeschickt.
 7. **Mögliche Flughöhen**: Höhenband pro Punkt und für die ganze Strecke. Untergrenze = Geländehöhe des Stützpunkts + `terrain_clearance_ft` (1000 ft), Obergrenze = Wolkenbasis, die in 80 % der Member übertroffen wird, − `clearance_ft` (500 ft). Liegt die geplante Höhe außerhalb, wird gewarnt.
 8. **Briefing-Mail 2 h vor Abflug** mit aktueller Zusammenfassung (+ GRAMET), einmalig pro Flug (`--briefing` sendet sofort).
-9. Benachrichtigt wird bei der ersten Bewertung, bei einer Änderung um ≥ `delta_pct` Prozentpunkte oder bei einem Wechsel der Kategorie.
+9. **Wind je Streckenabschnitt** auf Planhöhe: Richtung/Stärke, Gegen-/Rückenwind, Seitenwind, Groundspeed, Flugzeit, Nullgradgrenze, Vereisungsgefahr (Wolken bei −10…0 °C).
+10. **Querschnitt-Grafik** (GRAMET-ähnlich, `charts/*.png`, wird mit Telegram/E-Mail verschickt und im Actions-Lauf als Download abgelegt): Gelände, Wolken je Höhe, 0 °C-Linie, Vereisung (★), Windfahnen, geplante Höhe, mögliches Höhenband (grün), Problemstellen farbig hinterlegt und im unteren Streifen mit Grund (VIS/CIG/CLD/GUST/RAIN/CB).
+11. Benachrichtigt wird bei der ersten Bewertung, bei einer Änderung um ≥ `delta_pct` Prozentpunkte oder bei einem Wechsel der Kategorie.
 
 ## Hosting: kostenlos mit GitHub Actions
 
@@ -52,7 +54,7 @@ python -m vfrcheck flights/mein-flug.yaml --force-notify
 
 - Die Wolkenbasis wird aus der Taupunktdifferenz am Boden geschätzt. Inversionen und Hochnebel können dabei unterschätzt werden. Die ETA wird ohne Windkorrektur berechnet.
 - Sichtwerte liefert nicht jedes Ensemble-Modell. Fehlende Werte werden ignoriert.
-- Die Geländeuntergrenze nutzt nur die Höhe am Stützpunkt (alle ~20 NM), nicht den höchsten Grat dazwischen – MEF/Karte prüfen!
+- Die Geländeuntergrenze nutzt nur die Modellhöhe am Stützpunkt (alle 5 NM, ICON-D2-Gitter ~2 km), nicht den höchsten Grat dazwischen – MEF/Karte prüfen!
 - „Über den Wolken“ (VFR on top) wird nicht vorgeschlagen.
 - GitHub-Cron kann sich verspäten; die Briefing-Mail kommt daher ca. 1–3 h vor Abflug.
 - Luftraum, NOTAMs und Gebirgspässe (Talnebel!) werden **nicht** geprüft.
