@@ -19,11 +19,30 @@ Prüft anhand eines Flugplans, wie wahrscheinlich ein Flug unter **VFR-Bedingung
 10. **Querschnitt-Grafik** (GRAMET-ähnlich, `charts/*.png`, wird mit Telegram/E-Mail verschickt und im Actions-Lauf als Download abgelegt): Gelände, Wolken je Höhe, 0 °C-Linie, Vereisung (★), Windfahnen, geplante Höhe, mögliches Höhenband (grün), Problemstellen farbig hinterlegt und im unteren Streifen mit Grund (VIS/CIG/CLD/GUST/RAIN/CB).
 11. Benachrichtigt wird bei der ersten Bewertung, bei einer Änderung um ≥ `delta_pct` Prozentpunkte oder bei einem Wechsel der Kategorie.
 
+## Flugplan übergeben (alle Zeiten UTC)
+
+**1. Telegram (am bequemsten)**: Befehle an deinen Bot schicken; sie werden alle ~10 min abgeholt, die Bewertung kommt dann als Nachricht.
+
+```
+/flug LOWW LOAN LOWG 12.10. 08:00 4500 105     Wegpunkte (ICAO oder 47.63,15.83), Datum, Zeit UTC, Höhe ft, [TAS kt]
+GPX-Datei senden, Beschriftung: /flug 12.10. 08:00 4500 105
+/liste                 geplante Flüge
+/check 20261012        sofort prüfen (Name oder Anfang)
+/loeschen 20261012     Flug löschen
+/hilfe
+```
+Nur Nachrichten aus `TELEGRAM_CHAT_ID` werden angenommen.
+
+**2. YAML-Datei** in `flights/` (auf GitHub: *Add file → Create new file*), siehe `flights/beispiel-loww-lowg.yaml`.
+`departure: 2026-10-12T08:00Z` – ohne Zeitzone gilt UTC.
+
+**3. GPX**: `.gpx` (z. B. Export aus SkyDemon, Garmin, autorouter) nach `flights/` hochladen und im YAML statt `route:` `gpx: datei.gpx` angeben. Verwendet wird die Route (`rtept`), sonst die Wegpunkte (`wpt`), sonst der Track (`trkpt`). Wegpunktnamen im ICAO-Format bekommen METAR/TAF.
+
 ## Hosting: kostenlos mit GitHub Actions
 
-Einen eigenen Server brauchst du nicht. Der Workflow `.github/workflows/check.yml` läuft **stündlich auf GitHub** und speichert den letzten Stand in `state/`.
+Einen eigenen Server brauchst du nicht. Der Workflow `.github/workflows/check.yml` läuft **alle 10 Minuten auf GitHub** (Telegram-Befehle; alle Flüge werden stündlich geprüft) und speichert den letzten Stand in `state/`.
 - Öffentliche Repos: Actions sind unbegrenzt kostenlos.
-- Private Repos: 2000 Freiminuten pro Monat. Ein Lauf dauert unter einer Minute, stündlich sind das ca. 720 Minuten pro Monat, also reicht das.
+- Private Repos: 2000 Freiminuten pro Monat. Alle 10 Minuten sind das ca. 4300 Minuten pro Monat, also mehr als die Freiminuten. Für ein privates Repo deshalb im Workflow den Cron auf stündlich (`17 * * * *`) stellen.
 - ⚠️ In einem **öffentlichen** Repo sind deine Flugpläne öffentlich sichtbar. Für den Dauerbetrieb solltest du das Repo auf privat stellen.
 - Hinweis: Bei Repos ohne Aktivität deaktiviert GitHub geplante Workflows nach 60 Tagen. Die State-Commits zählen als Aktivität.
 

@@ -1,7 +1,10 @@
 """Flugplan laden, Wegpunkte auflösen und die Strecke in Stützpunkte mit ETA zerlegen."""
 import datetime as dt
 import math
+import re
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from pathlib import Path
 
 import requests
 import yaml
@@ -38,15 +41,40 @@ def load_flight(path):
     fl["minima"] = {**DEFAULT_MINIMA, **(fl.get("minima") or {})}
     fl.setdefault("alert", {}).setdefault("delta_pct", 15)
     fl["departure"] = _parse_time(fl["departure"])
+    if fl.get("gpx"):
+        fl["route"] = parse_gpx(Path(path).parent / fl["gpx"])
     fl["waypoints"] = [_resolve(w, fl["cruise_alt_ft"]) for w in fl["route"]]
     return fl
 
 
 def _parse_time(v):
-    t = v if isinstance(v, dt.datetime) else dt.datetime.fromisoformat(str(v))
-    if t.tzinfo is None:
-        raise ValueError("departure braucht eine Zeitzone, z.B. 2026-10-10T09:00:00+02:00")
-    return t.astimezone(dt.timezone.utc)
+    """Abflugzeit; ohne Zeitzonenangabe gilt UTC."""
+    t = v if isinstance(v, dt.datetime) else dt.datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+    return t.replace(tzinfo=dt.timezone.utc) if t.tzinfo is None else t.astimezone(dt.timezone.utc)
+
+
+def parse_gpx(path):
+    """Wegpunkte aus GPX: Route (rtept), sonst Wegpunkte (wpt), sonst Track (trkpt, ausgedünnt)."""
+    local = lambda e: e.tag.rsplit("}", 1)[-1]
+    elems = list(ET.parse(path).getroot().iter())
+    for tag in ("rtept", "wpt", "trkpt"):
+        pts = [e for e in elems if local(e) == tag]
+        if len(pts) >= 2:
+            break
+    else:
+        raise ValueError(f"{path}: keine Route/Wegpunkte gefunden")
+    route = []
+    for k, p in enumerate(pts):
+        w = {"lat": float(p.get("lat")), "lon": float(p.get("lon"))}
+        name = next(((c.text or "").strip() for c in p if local(c) == "name"), "")
+        if name:
+            w["name"] = name
+            if re.fullmatch(r"[A-Z]{2}[A-Z0-9]{2}", name):
+                w["icao"] = name
+        if route and k < len(pts) - 1 and dist_nm(route[-1], w) < 2:
+            continue  # Track ausdünnen
+        route.append(w)
+    return route
 
 
 def _resolve(w, cruise_alt):

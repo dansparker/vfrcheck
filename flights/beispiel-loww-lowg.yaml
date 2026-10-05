@@ -1,6 +1,6 @@
 # Beispiel-Flugplan. Eine Datei pro Flug; nach dem Flug löschen.
 name: LOWW-LOWG
-departure: 2026-10-07T09:00:00+02:00   # Zeitzone ist Pflicht
+departure: 2026-10-07T07:00Z           # UTC
 tas_kt: 105
 cruise_alt_ft: 4500
 route:                           # ICAO-Codes oder eigene Punkte mit lat/lon (optional alt_ft)

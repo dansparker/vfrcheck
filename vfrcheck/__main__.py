@@ -10,7 +10,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import assess, chart, gramet, notify, route, section, weather
+from . import assess, chart, gramet, notify, route, section, telegram_bot, weather
 
 STATE_DIR = Path("state")
 ENS_NM = 15  # Abstand der Ensemble-Abfragen
@@ -121,7 +121,7 @@ def ensemble_for(points, sec):
     return out
 
 
-def run(path, args):
+def run(path, args, force=False):
     fl = route.load_flight(path)
     fl.setdefault("name", Path(path).stem)
     now = dt.datetime.now(dt.timezone.utc)
@@ -159,7 +159,7 @@ def run(path, args):
             reason = f"Änderung {old_p:.0f}% → {p:.0f}%"
         elif category(p) != category(old_p):
             reason = f"Kategorie {category(old_p)} → {category(p)}"
-    if args.force_notify and not reason:
+    if (args.force_notify or force) and not reason:
         reason = "Manuell ausgelöst"
 
     if reason and not args.dry_run:
@@ -192,16 +192,34 @@ def main():
     ap.add_argument("--force-notify", action="store_true")
     ap.add_argument("--briefing", action="store_true", help="Briefing-Mail sofort senden")
     args = ap.parse_args()
-    files = args.files or sorted(glob.glob("flights/*.yaml"))
+    created, forced = set(), set()
+    if not args.dry_run:
+        created, forced = telegram_bot.process()
+    if args.files:
+        files = args.files
+    else:
+        # Cron alle 10 min holt Telegram-Befehle; volle Prüfung aller Flüge nur einmal pro Stunde
+        files = sorted(glob.glob("flights/*.yaml"))
+        now = dt.datetime.now(dt.timezone.utc)
+        last = STATE_DIR / "last_full_check.txt"
+        hourly = (os.environ.get("GITHUB_EVENT_NAME") != "schedule" or not last.exists()
+                  or now - dt.datetime.fromisoformat(last.read_text().strip()) >= dt.timedelta(minutes=55))
+        if hourly and not args.dry_run:
+            STATE_DIR.mkdir(exist_ok=True)
+            last.write_text(now.isoformat())
+        if not hourly:
+            files = [f for f in files if str(Path(f)) in {str(Path(x)) for x in created | forced}]
     summary = []
     for f in files:
         try:
-            t = run(f, args)
+            t = run(f, args, force=str(Path(f)) in {str(Path(x)) for x in forced})
             if t:
                 summary.append(t)
         except Exception as e:
             print(f"{f}: Fehler: {e}")
             summary.append(f"{f}: Fehler: {e}")
+            if str(Path(f)) in {str(Path(x)) for x in created | forced}:
+                telegram_bot.reply(f"⚠ {Path(f).stem}: {e}")
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as s:
             s.write("\n\n---\n\n".join(f"```\n{t}\n```" for t in summary))

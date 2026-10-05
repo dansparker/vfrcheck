@@ -1,7 +1,7 @@
 name: vfrcheck
 on:
   schedule:
-    - cron: "17 * * * *"   # stündlich
+    - cron: "*/10 * * * *"   # Telegram-Befehle alle 10 min, volle Prüfung stündlich
   workflow_dispatch:
     inputs:
       force_notify:
@@ -50,5 +50,5 @@ jobs:
         run: |
           git config user.name "vfrcheck-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add state
-          git diff --cached --quiet || (git commit -m "state update" && git push)
+          git add state flights
+          git diff --cached --quiet || (git commit -m "state/flights update" && git pull --rebase -q && git push)
