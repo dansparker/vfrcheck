@@ -13,7 +13,9 @@ Prüft anhand eines Flugplans, wie wahrscheinlich ein Flug unter **VFR-Bedingung
    Kategorien: ≥80 % GO, ≥50 % MARGINAL, darunter NO-GO.
 5. **Problemstellen**: pro Punkt der Anteil kritischer Member samt Grund (z. B. „Semmering: 35 % kritisch, Ceiling < 1500 ft“).
 6. **METAR/TAF** der Flugplätze (aviationweather.gov) und optional ein **GRAMET**-Querschnitt (autorouter) werden mitgeschickt.
-7. Benachrichtigt wird bei der ersten Bewertung, bei einer Änderung um ≥ `delta_pct` Prozentpunkte oder bei einem Wechsel der Kategorie.
+7. **Mögliche Flughöhen**: Höhenband pro Punkt und für die ganze Strecke. Untergrenze = Geländehöhe des Stützpunkts + `terrain_clearance_ft` (1000 ft), Obergrenze = Wolkenbasis, die in 80 % der Member übertroffen wird, − `clearance_ft` (500 ft). Liegt die geplante Höhe außerhalb, wird gewarnt.
+8. **Briefing-Mail 2 h vor Abflug** mit aktueller Zusammenfassung (+ GRAMET), einmalig pro Flug (`--briefing` sendet sofort).
+9. Benachrichtigt wird bei der ersten Bewertung, bei einer Änderung um ≥ `delta_pct` Prozentpunkte oder bei einem Wechsel der Kategorie.
 
 ## Hosting: kostenlos mit GitHub Actions
 
@@ -50,6 +52,9 @@ python -m vfrcheck flights/mein-flug.yaml --force-notify
 
 - Die Wolkenbasis wird aus der Taupunktdifferenz am Boden geschätzt. Inversionen und Hochnebel können dabei unterschätzt werden. Die ETA wird ohne Windkorrektur berechnet.
 - Sichtwerte liefert nicht jedes Ensemble-Modell. Fehlende Werte werden ignoriert.
+- Die Geländeuntergrenze nutzt nur die Höhe am Stützpunkt (alle ~20 NM), nicht den höchsten Grat dazwischen – MEF/Karte prüfen!
+- „Über den Wolken“ (VFR on top) wird nicht vorgeschlagen.
+- GitHub-Cron kann sich verspäten; die Briefing-Mail kommt daher ca. 1–3 h vor Abflug.
 - Luftraum, NOTAMs und Gebirgspässe (Talnebel!) werden **nicht** geprüft.
 - **Das Tool ersetzt kein offizielles Briefing** (z. B. Austro Control / DWD / flugwetter.de). Die Entscheidung trifft der PIC.
 

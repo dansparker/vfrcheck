@@ -13,6 +13,7 @@ DEFAULT_MINIMA = {
     "vis_m": 5000,          # Mindestsicht
     "ceiling_ft_agl": 1500,  # Mindest-Wolkenuntergrenze über Grund (BKN/OVC)
     "clearance_ft": 500,     # Abstand Reiseflughöhe -> Wolkenbasis
+    "terrain_clearance_ft": 1000,  # Mindestabstand zum Gelände (Stützpunkt-Höhe, nicht Grat!)
     "max_gust_kt": 25,
     "max_precip_mm": 2.0,    # pro Stunde
     "max_cape": 800,         # J/kg, Gewitterneigung

@@ -8,6 +8,10 @@ on:
         description: "Benachrichtigung erzwingen"
         type: boolean
         default: false
+      briefing:
+        description: "Briefing-Mail sofort senden"
+        type: boolean
+        default: false
 permissions:
   contents: write
 concurrency: vfrcheck
@@ -21,7 +25,7 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r requirements.txt
-      - run: python -m vfrcheck ${{ inputs.force_notify && '--force-notify' || '' }}
+      - run: python -m vfrcheck ${{ inputs.force_notify && '--force-notify' || '' }} ${{ inputs.briefing && '--briefing' || '' }}
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}

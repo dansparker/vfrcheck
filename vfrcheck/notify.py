@@ -19,6 +19,14 @@ def send(subject, text, image=None):
     return sent
 
 
+def email(subject, text, image=None):
+    try:
+        return _email(subject, text, image)
+    except Exception as e:
+        print(f"email: Versand fehlgeschlagen: {e}")
+        return False
+
+
 def _telegram(subject, text, image):
     token, chat = env("TELEGRAM_BOT_TOKEN"), env("TELEGRAM_CHAT_ID")
     if not (token and chat):

@@ -13,10 +13,38 @@ from pathlib import Path
 from . import assess, gramet, notify, route, weather
 
 STATE_DIR = Path("state")
+BRIEFING_BEFORE = dt.timedelta(hours=2)
+BRIEFING_WINDOW = dt.timedelta(minutes=50)  # Toleranz, da der Cron nur stündlich (und oft verspätet) läuft
 
 
 def category(p):
     return "GO" if p >= 80 else "MARGINAL" if p >= 50 else "NO-GO"
+
+
+def _ft(v):
+    return "unbegrenzt" if v == float("inf") else f"{round(v / 100) * 100:.0f} ft"
+
+
+def altitudes(fl, res):
+    """Mögliche Flughöhen: Gelände + Abstand bis Wolkenbasis − Abstand (80 % der Member)."""
+    if not res["band"]:
+        return []
+    lo, hi = res["band"]
+    lines = ["Mögliche Flughöhen (MSL, 80 % sicher unter tiefer Bewölkung):"]
+    if lo <= hi:
+        lines.append(f"- ganze Strecke: {_ft(lo)} bis {_ft(hi)}"
+                     + ("" if lo <= fl["cruise_alt_ft"] <= hi else f"  ⚠ geplante {fl['cruise_alt_ft']} ft liegt außerhalb"))
+    else:
+        lines.append("- KEIN durchgehendes Höhenband – Abschnitte:")
+    for r in res["points"]:
+        if "band" not in r:
+            continue
+        b_lo, b_hi, base = r["band"]
+        if base != float("inf") or b_lo > hi:
+            flag = " ⚠ zu eng" if b_lo > b_hi else ""
+            lines.append(f"  · {r['point'].name}: {_ft(b_lo)}–{_ft(b_hi)} (Basis ~{_ft(base)}){flag}")
+    lines.append("")
+    return lines
 
 
 def report(fl, res, metars):
@@ -24,6 +52,7 @@ def report(fl, res, metars):
     lines = [f"Flug {fl['name']} – Abflug {fl['departure']:%Y-%m-%d %H:%M} UTC, {fl['cruise_alt_ft']} ft",
              f"VFR-Wahrscheinlichkeit: {p:.0f}% ({category(p)}), {res['members']} Ensemble-Member"
              if p is not None else "Außerhalb des Vorhersagezeitraums (max. ~15 Tage)", ""]
+    lines += altitudes(fl, res)
     problems = [r for r in res["points"] if r["fail_pct"]]
     if problems:
         lines.append("Mögliche Probleme entlang der Strecke:")
@@ -69,9 +98,22 @@ def run(path, args):
         img = gramet.fetch(fl, points)
         subj = f"VFR {fl['name']}: {p:.0f}% {category(p)} ({reason})" if p is not None else f"VFR {fl['name']}"
         print("Gesendet über:", notify.send(subj, text, img) or "keinen Kanal (nicht konfiguriert)")
-    if p is not None and not args.dry_run and (reason or old_p is None):
+    state = dict(old)
+    if p is not None and (reason or old_p is None):
+        state.update(probability=p, updated=now.isoformat())
+
+    # Briefing-Mail 2 h vor Abflug (einmalig)
+    to_dep = fl["departure"] - now
+    if (args.briefing or (abs(to_dep - BRIEFING_BEFORE) <= BRIEFING_WINDOW and not old.get("briefing_sent")))             and not args.dry_run:
+        subj = f"Briefing {fl['name']} – Abflug {fl['departure']:%H:%M} UTC" + (
+            f": {p:.0f}% {category(p)}" if p is not None else "")
+        if notify.email(subj, text, gramet.fetch(fl, points)):
+            state["briefing_sent"] = now.isoformat()
+            print("Briefing-Mail gesendet")
+
+    if state != old and not args.dry_run:
         STATE_DIR.mkdir(exist_ok=True)
-        state_file.write_text(json.dumps({"probability": p, "updated": now.isoformat()}, indent=1))
+        state_file.write_text(json.dumps(state, indent=1))
     return text
 
 
@@ -81,6 +123,7 @@ def main():
     ap.add_argument("files", nargs="*")
     ap.add_argument("--dry-run", action="store_true", help="nichts senden, keinen Zustand speichern")
     ap.add_argument("--force-notify", action="store_true")
+    ap.add_argument("--briefing", action="store_true", help="Briefing-Mail sofort senden")
     args = ap.parse_args()
     files = args.files or sorted(glob.glob("flights/*.yaml"))
     summary = []
