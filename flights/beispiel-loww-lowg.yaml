@@ -1,0 +1,17 @@
+# Beispiel-Flugplan. Eine Datei pro Flug; nach dem Flug löschen.
+name: LOWW-LOWG
+departure: 2026-10-07T09:00:00+02:00   # Zeitzone ist Pflicht
+tas_kt: 105
+cruise_alt_ft: 4500
+route:                           # ICAO-Codes oder eigene Punkte mit lat/lon (optional alt_ft)
+  - LOWW
+  - {name: Wiener Neustadt, lat: 47.84, lon: 16.22}
+  - {name: Semmering, lat: 47.63, lon: 15.83, alt_ft: 5500}
+  - LOWG
+minima:                          # optional, Defaults siehe vfrcheck/route.py
+  vis_m: 5000
+  ceiling_ft_agl: 1500
+  clearance_ft: 500
+  max_gust_kt: 25
+alert:
+  delta_pct: 15                  # Benachrichtigung ab ±15 Prozentpunkten
