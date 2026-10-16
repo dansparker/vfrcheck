@@ -19,6 +19,12 @@ Prüft anhand eines Flugplans, wie wahrscheinlich ein Flug unter **VFR-Bedingung
 10. **Querschnitt-Grafik** (GRAMET-ähnlich, `charts/*.png`, wird mit Telegram/E-Mail verschickt und im Actions-Lauf als Download abgelegt): Gelände, Wolken je Höhe, 0 °C-Linie, Vereisung (★), Windfahnen, geplante Höhe, mögliches Höhenband (grün), Problemstellen farbig hinterlegt und im unteren Streifen mit Grund (VIS/CIG/CLD/GUST/RAIN/CB).
 11. Benachrichtigt wird bei der ersten Bewertung, bei einer Änderung um ≥ `delta_pct` Prozentpunkte oder bei einem Wechsel der Kategorie.
 
+## Webseite
+
+**https://dansparker.github.io/vfrcheck/**: Übersicht aller geplanten Flüge mit Wahrscheinlichkeit, Verlauf, Flughöhen, Wind je Abschnitt, Problemstellen, Querschnitt und METAR/TAF. Sie wird stündlich per GitHub Pages neu erzeugt.
+Mit dem Formular „Neuer Flug“ wird der Flugplan im GitHub-Editor angelegt; dort nur noch „Commit changes“ klicken.
+⚠️ Solange das Repo öffentlich ist, ist auch die Seite öffentlich.
+
 ## Flugplan übergeben (alle Zeiten UTC)
 
 **1. Telegram (am bequemsten)**: Befehle an deinen Bot schicken; sie werden alle ~10 min abgeholt, die Bewertung kommt dann als Nachricht.

@@ -10,7 +10,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import assess, chart, gramet, notify, route, section, telegram_bot, weather
+from . import assess, chart, gramet, notify, route, section, site, telegram_bot, weather
 
 STATE_DIR = Path("state")
 ENS_NM = 15  # Abstand der Ensemble-Abfragen
@@ -27,23 +27,26 @@ def _ft(v):
 
 
 def altitudes(fl, res):
-    """Mögliche Flughöhen: Gelände + Abstand bis Wolkenbasis − Abstand (80 % der Member)."""
+    """Mögliche Flughöhen: Gelände + Abstand bis Wolkenbasis − Abstand (80 % der Member), je Abschnitt."""
     if not res["band"]:
         return []
     lo, hi = res["band"]
     lines = ["Mögliche Flughöhen (MSL, 80 % sicher unter tiefer Bewölkung):"]
     if lo <= hi:
         lines.append(f"- ganze Strecke: {_ft(lo)} bis {_ft(hi)}"
-                     + ("" if lo <= fl["cruise_alt_ft"] <= hi else f"  ⚠ geplante {fl['cruise_alt_ft']} ft liegt außerhalb (Gelände/Wolken)"))
+                     + ("" if lo <= fl["cruise_alt_ft"] <= hi else
+                        f"  ⚠ geplante {fl['cruise_alt_ft']} ft liegt außerhalb (Gelände/Wolken)"))
     else:
-        lines.append("- KEIN durchgehendes Höhenband – Abschnitte:")
-    for r in res["points"]:
-        if "band" not in r:
+        lines.append("- KEIN durchgehendes Höhenband")
+    wps = fl["waypoints"]
+    for k, (a, b) in enumerate(zip(wps, wps[1:])):
+        bands = [r["band"] for r in res["points"] if "band" in r and r["point"].leg == k]
+        if not bands:
             continue
-        b_lo, b_hi, base = r["band"]
-        if base != float("inf") or b_lo > hi:
+        b_lo, b_hi = max(x[0] for x in bands), min(x[1] for x in bands)
+        if lo > hi or (b_lo, b_hi) != (lo, hi):
             flag = " ⚠ zu eng" if b_lo > b_hi else ""
-            lines.append(f"  · {r['point'].name}: {_ft(b_lo)}–{_ft(b_hi)} (Basis ~{_ft(base)}){flag}")
+            lines.append(f"  · {a['name']}→{b['name']}: {_ft(b_lo)}–{_ft(b_hi)}{flag}")
     lines.append("")
     return lines
 
@@ -138,7 +141,8 @@ def run(path, args, force=False):
     res = assess.assess(points, ensemble_for(points, sec), fl["minima"])
     icaos = [w["icao"] for w in fl["waypoints"] if w.get("icao")]
     legs = section.legs(fl, points, profs)
-    text = report(fl, res, weather.metar_taf(icaos), legs)
+    metars = weather.metar_taf(icaos)
+    text = report(fl, res, metars, legs)
     print(text, "\n")
     png = chart.render(fl, points, res, profs, legs)
     Path("charts").mkdir(exist_ok=True)
@@ -168,10 +172,14 @@ def run(path, args, force=False):
     state = dict(old)
     if p is not None and (reason or old_p is None):
         state.update(probability=p, updated=now.isoformat())
+    hist = state.get("history", [])
+    if p is not None and (not hist or now - dt.datetime.fromisoformat(hist[-1][0]) >= dt.timedelta(minutes=30)):
+        state["history"] = (hist + [[now.isoformat(timespec="minutes"), round(p)]])[-200:]
 
     # Briefing-Mail 2 h vor Abflug (einmalig)
     to_dep = fl["departure"] - now
-    if (args.briefing or (abs(to_dep - BRIEFING_BEFORE) <= BRIEFING_WINDOW and not old.get("briefing_sent")))             and not args.dry_run:
+    if ((args.briefing or (abs(to_dep - BRIEFING_BEFORE) <= BRIEFING_WINDOW and not old.get("briefing_sent")))
+            and not args.dry_run):
         subj = f"Briefing {fl['name']} – Abflug {fl['departure']:%H:%M} UTC" + (
             f": {p:.0f}% {category(p)}" if p is not None else "")
         if notify.email(subj, text, images()):
@@ -180,8 +188,10 @@ def run(path, args, force=False):
 
     if state != old and not args.dry_run:
         STATE_DIR.mkdir(exist_ok=True)
-        state_file.write_text(json.dumps(state, indent=1))
-    return text
+        state_file.write_text(json.dumps(state))
+    return {"stem": Path(path).stem, "fl": fl, "res": res, "legs": legs, "metars": metars, "text": text,
+            "png": png, "history": state.get("history", []), "checked": now,
+            "altitudes": altitudes(fl, res)[1:-1], "problems": problem_segments(res, legs)}
 
 
 def main():
@@ -200,6 +210,7 @@ def main():
     else:
         # Cron alle 10 min holt Telegram-Befehle; volle Prüfung aller Flüge nur einmal pro Stunde
         files = sorted(glob.glob("flights/*.yaml"))
+        hourly = False
         now = dt.datetime.now(dt.timezone.utc)
         last = STATE_DIR / "last_full_check.txt"
         hourly = (os.environ.get("GITHUB_EVENT_NAME") != "schedule" or not last.exists()
@@ -209,17 +220,21 @@ def main():
             last.write_text(now.isoformat())
         if not hourly:
             files = [f for f in files if str(Path(f)) in {str(Path(x)) for x in created | forced}]
-    summary = []
+    summary, results = [], []
+    full = bool(args.files) or hourly
     for f in files:
         try:
-            t = run(f, args, force=str(Path(f)) in {str(Path(x)) for x in forced})
-            if t:
-                summary.append(t)
+            r = run(f, args, force=str(Path(f)) in {str(Path(x)) for x in forced})
+            if r:
+                summary.append(r["text"])
+                results.append(r)
         except Exception as e:
             print(f"{f}: Fehler: {e}")
             summary.append(f"{f}: Fehler: {e}")
             if str(Path(f)) in {str(Path(x)) for x in created | forced}:
                 telegram_bot.reply(f"⚠ {Path(f).stem}: {e}")
+    if full:  # Webseite nur bei vollständigen Läufen neu bauen
+        site.build(results, Path("site"))
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as s:
             s.write("\n\n---\n\n".join(f"```\n{t}\n```" for t in summary))
