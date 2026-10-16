@@ -63,4 +63,4 @@ jobs:
           git config user.name "vfrcheck-bot"
           git config user.email "actions@users.noreply.github.com"
           git add state flights
-          git diff --cached --quiet || (git commit -m "state/flights update" && git pull --rebase -q && git push)
+          git diff --cached --quiet || (git commit -m "state/flights update" && git pull --rebase -X theirs -q && git push)
