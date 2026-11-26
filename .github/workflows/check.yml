@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+      url: ${{ steps.deploy.outputs.page_url || steps.deploy2.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -51,16 +51,25 @@ jobs:
           path: charts/
           if-no-files-found: ignore
           retention-days: 7
-      - uses: actions/upload-pages-artifact@v3
-        if: hashFiles('site/index.html') != ''
-        with:
-          path: site
-      - uses: actions/deploy-pages@v4
-        id: deploy
-        if: hashFiles('site/index.html') != ''
       - name: Zustand speichern
+        if: always()
         run: |
           git config user.name "vfrcheck-bot"
           git config user.email "actions@users.noreply.github.com"
           git add state flights
           git diff --cached --quiet || (git commit -m "state/flights update" && git pull --rebase -X theirs -q && git push)
+      - uses: actions/upload-pages-artifact@v4
+        if: hashFiles('site/index.html') != ''
+        with:
+          path: site
+      # deploy-pages scheitert gelegentlich an GitHub-API-Aussetzern ("Fetching artifact metadata failed") -> 1x wiederholen
+      - uses: actions/deploy-pages@v4
+        id: deploy
+        if: hashFiles('site/index.html') != ''
+        continue-on-error: true
+      - name: Kurz warten vor zweitem Versuch
+        if: steps.deploy.outcome == 'failure'
+        run: sleep 30
+      - uses: actions/deploy-pages@v4
+        id: deploy2
+        if: steps.deploy.outcome == 'failure'
