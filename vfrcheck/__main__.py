@@ -213,7 +213,7 @@ def main():
         hourly = False
         now = dt.datetime.now(dt.timezone.utc)
         last = STATE_DIR / "last_full_check.txt"
-        hourly = (os.environ.get("GITHUB_EVENT_NAME") != "schedule" or not last.exists()
+        hourly = (os.environ.get("GITHUB_EVENT_NAME") not in ("schedule", "repository_dispatch") or not last.exists()
                   or now - dt.datetime.fromisoformat(last.read_text().strip()) >= dt.timedelta(minutes=55))
         if hourly and not args.dry_run:
             STATE_DIR.mkdir(exist_ok=True)

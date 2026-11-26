@@ -52,6 +52,14 @@ Einen eigenen Server brauchst du nicht. Der Workflow `.github/workflows/check.ym
 - ⚠️ In einem **öffentlichen** Repo sind deine Flugpläne öffentlich sichtbar. Für den Dauerbetrieb solltest du das Repo auf privat stellen.
 - Hinweis: Bei Repos ohne Aktivität deaktiviert GitHub geplante Workflows nach 60 Tagen. Die State-Commits zählen als Aktivität.
 
+**Wichtig – zuverlässiger Takt:** GitHub führt geplante Workflows bei Last oft stark verzögert oder gar nicht aus (beobachtet: 2–8 statt 144 Läufe pro Tag). Deshalb besser extern auslösen, z. B. kostenlos mit [cron-job.org](https://cron-job.org):
+1. Auf GitHub unter *Settings → Developer settings → Fine-grained tokens* ein Token anlegen: nur dieses Repo, Berechtigung **Contents: Read and write** (für `repository_dispatch` nötig).
+2. Bei cron-job.org einen Job alle 10 Minuten anlegen:
+   - `POST https://api.github.com/repos/<user>/vfrcheck/dispatches`
+   - Header: `Authorization: Bearer <TOKEN>`, `Accept: application/vnd.github+json`
+   - Body: `{"event_type":"tick"}`
+Der GitHub-Cron bleibt als Reserve aktiv.
+
 Alternativen: ein PHP-Webhoster scheidet meist aus, weil dort kein Python und kein Cron verfügbar ist. Möglich sind Oracle Cloud Always Free (VM), PythonAnywhere (ein täglicher Task kostenlos) oder ein Raspberry Pi zu Hause.
 
 ## Einrichtung

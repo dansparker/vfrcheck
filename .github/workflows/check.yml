@@ -2,6 +2,8 @@ name: vfrcheck
 on:
   schedule:
     - cron: "*/10 * * * *"   # Telegram-Befehle alle 10 min, volle Prüfung stündlich
+  repository_dispatch:
+    types: [tick]          # externer Takt (z.B. cron-job.org), da GitHub-Cron unzuverlässig ist
   workflow_dispatch:
     inputs:
       force_notify:
