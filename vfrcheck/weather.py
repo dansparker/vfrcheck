@@ -81,7 +81,7 @@ def metar_taf(icaos):
             r = requests.get(f"https://aviationweather.gov/api/data/{kind}",
                              params={"ids": ids, "format": "json"}, timeout=30)
             r.raise_for_status()
-            for row in r.json() or []:
+            for row in (r.json() if r.text.strip() else []):  # kleine Plätze: leere Antwort
                 out.setdefault(row.get("icaoId"), {})[kind] = row.get("rawOb") or row.get("rawTAF")
         except Exception as e:  # nicht kritisch
             print(f"{kind} nicht verfügbar: {e}")

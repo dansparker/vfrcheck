@@ -1,5 +1,8 @@
 """Flugplan laden, Wegpunkte auflösen und die Strecke in Stützpunkte mit ETA zerlegen."""
+import csv
 import datetime as dt
+import io
+import json
 import math
 import re
 import xml.etree.ElementTree as ET
@@ -81,17 +84,45 @@ def parse_gpx(path):
     return route
 
 
+AIRPORT_CACHE = Path("state") / "airports.json"
+OURAIRPORTS = "https://davidmegginson.github.io/ourairports-data/airports.csv"
+
+
+def airport(icao):
+    """(lat, lon) eines Flugplatzes: Cache -> aviationweather.gov -> OurAirports (kennt auch kleine Plätze)."""
+    icao = icao.upper()
+    cache = json.loads(AIRPORT_CACHE.read_text()) if AIRPORT_CACHE.exists() else {}
+    if icao in cache:
+        return tuple(cache[icao])
+    pos = None
+    try:
+        r = requests.get("https://aviationweather.gov/api/data/airport",
+                         params={"ids": icao, "format": "json"}, timeout=30)
+        data = r.json() if r.ok and r.text.strip() else []
+        if data:
+            pos = (float(data[0]["lat"]), float(data[0]["lon"]))
+    except (requests.RequestException, ValueError):
+        pass
+    if pos is None:
+        r = requests.get(OURAIRPORTS, timeout=120)
+        r.raise_for_status()
+        for row in csv.DictReader(io.StringIO(r.content.decode("utf-8"))):
+            if icao in (row.get("ident"), row.get("icao_code"), row.get("gps_code")):
+                pos = (float(row["latitude_deg"]), float(row["longitude_deg"]))
+                break
+    if pos is None:
+        raise ValueError(f"Flugplatz {icao} nicht gefunden – bitte lat/lon angeben")
+    AIRPORT_CACHE.parent.mkdir(exist_ok=True)
+    AIRPORT_CACHE.write_text(json.dumps({**cache, icao: pos}, indent=0))
+    return pos
+
+
 def _resolve(w, cruise_alt):
     if isinstance(w, str):
-        w = {"icao": w}
+        w = {"icao": w.upper()}
     if "lat" not in w:
-        r = requests.get("https://aviationweather.gov/api/data/airport",
-                         params={"ids": w["icao"], "format": "json"}, timeout=30)
-        r.raise_for_status()
-        data = r.json()
-        if not data:
-            raise ValueError(f"Flugplatz {w['icao']} nicht gefunden – bitte lat/lon angeben")
-        w = {**w, "lat": float(data[0]["lat"]), "lon": float(data[0]["lon"])}
+        lat, lon = airport(w["icao"])
+        w = {**w, "lat": lat, "lon": lon}
     w.setdefault("name", w.get("icao", f"{w['lat']:.2f},{w['lon']:.2f}"))
     w.setdefault("alt_ft", cruise_alt)
     return w

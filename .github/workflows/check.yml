@@ -2,6 +2,9 @@ name: vfrcheck
 on:
   schedule:
     - cron: "*/10 * * * *"   # Telegram-Befehle alle 10 min, volle Prüfung stündlich
+  push:
+    branches: [main]
+    paths: ["flights/**"]  # neuer/geänderter Flugplan -> sofort prüfen (Bot-Commits lösen keinen Lauf aus)
   repository_dispatch:
     types: [tick]          # externer Takt (z.B. cron-job.org), da GitHub-Cron unzuverlässig ist
   workflow_dispatch:

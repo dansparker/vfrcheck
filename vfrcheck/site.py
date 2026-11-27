@@ -84,48 +84,112 @@ def _card(r):
   <h3>Querschnitt</h3>
   <a href="img/{e(r['stem'])}.png"><img src="img/{e(r['stem'])}.png" alt="Vertikalschnitt {e(fl['name'])}" loading="lazy"></a>
   <details><summary>METAR / TAF</summary>{wx or '<p class=muted>keine Daten</p>'}</details>
-  <div class="muted small">geprüft {r['checked']:%d.%m. %H:%M} UTC · {res['members']} Ensemble-Member ·
-    <a href="https://github.com/{REPO}/blob/main/flights/{e(r['stem'])}.yaml">Flugplan bearbeiten</a></div>
+  <footer class="actions">
+    <span class="muted small">geprüft {r['checked']:%d.%m. %H:%M} UTC · {res['members']} Ensemble-Member</span>
+    <span>
+      <button class="ghost" data-act="check" data-stem="{e(r['stem'])}">Jetzt prüfen</button>
+      <a class="btn ghost" href="https://github.com/{REPO}/edit/main/flights/{e(r['stem'])}.yaml" target="_blank">Bearbeiten</a>
+      <button class="ghost danger" data-act="delete" data-stem="{e(r['stem'])}">Löschen</button>
+    </span>
+  </footer>
 </article>"""
 
 
-FORM = """
-<article class="card" id="neu">
-  <h2>Neuer Flug</h2>
-  <p class="muted">Erzeugt den Flugplan und öffnet ihn im GitHub-Editor – dort nur noch „Commit changes“ klicken.
-    Alternativ per Telegram: <code>/flug LOWW LOWG 12.10. 08:00 4500</code></p>
-  <form id="f">
+FORM = r"""
+<dialog id="dlg-neu" class="card">
+  <form id="f" method="dialog">
+    <header class="wide"><h2>Neuer Flug</h2><button type="button" class="ghost" data-close>✕</button></header>
     <label>Name <input name="name" placeholder="LOWW-LOWG" required></label>
     <label>Abflug (UTC) <input name="dep" type="datetime-local" required></label>
     <label>Höhe ft <input name="alt" type="number" value="4500" step="500" required></label>
     <label>TAS kt <input name="tas" type="number" value="100" required></label>
     <label class="wide"><span>Route – ein Wegpunkt pro Zeile: ICAO oder <code>lat,lon</code> oder <code>lat,lon,Name,Höhe</code></span>
       <textarea name="route" rows="4" placeholder="LOWW&#10;47.84,16.22,Wiener Neustadt&#10;LOWG"></textarea></label>
-    <label class="wide"><span>… oder GPX-Datei (vorher <a href="https://github.com/__REPO__/upload/main/flights" target="_blank">hochladen</a>)</span>
-      <input name="gpx" placeholder="meine-route.gpx"></label>
-    <details class="wide"><summary>Minima (optional)</summary>
+    <label class="wide"><span>… oder GPX-Datei (Route aus SkyDemon, Garmin, autorouter …)</span>
+      <input name="gpxfile" type="file" accept=".gpx"></label>
+    <details class="wide"><summary>Minima</summary>
       <div class="row">
         <label>Sicht m <input name="vis_m" type="number" value="5000"></label>
         <label>Ceiling ft AGL <input name="ceiling_ft_agl" type="number" value="1500"></label>
         <label>Max. Böen kt <input name="max_gust_kt" type="number" value="25"></label>
         <label>Geländeabstand ft <input name="terrain_clearance_ft" type="number" value="1000"></label>
       </div></details>
-    <details class="wide"><summary>Flugzeugleistung (optional)</summary>
+    <details class="wide"><summary>Flugzeugleistung</summary>
       <div class="row">
         <label>Steigrate fpm <input name="climb_fpm" type="number" value="500"></label>
         <label>Steig-TAS kt <input name="climb_tas_kt" type="number" placeholder="75 % TAS"></label>
         <label>Sinkrate fpm <input name="descent_fpm" type="number" value="500"></label>
         <label>Dienstgipfelhöhe ft <input name="ceiling_ft" type="number" value="14000"></label>
       </div></details>
-    <button class="wide">Auf GitHub anlegen</button>
+    <button class="wide" type="submit">Flug anlegen und prüfen</button>
+    <p class="muted small wide">Oder per Telegram: <code>/flug LOWW LOWG 12.12. 08:00 4500</code></p>
   </form>
-  <pre id="out" hidden></pre>
-</article>
+</dialog>
+
+<dialog id="dlg-set" class="card">
+  <form id="s" method="dialog">
+    <header class="wide"><h2>Einstellungen</h2><button type="button" class="ghost" data-close>✕</button></header>
+    <label class="wide">GitHub-Token (Fine-grained, nur Repo <code>__REPO__</code>, „Contents: Read and write“)
+      <input name="token" type="password" autocomplete="off" placeholder="github_pat_…"></label>
+    <p class="muted small wide">Das Token wird nur in diesem Browser gespeichert und nur an api.github.com gesendet.
+      Es ist nötig, um Flüge von hier aus anzulegen, zu prüfen und zu löschen.</p>
+    <div class="wide row2"><button type="submit">Speichern</button><button type="button" class="ghost" id="forget">Token entfernen</button></div>
+  </form>
+</dialog>
+
+<div id="toast" role="status" hidden></div>
+
 <script>
-document.getElementById('f').addEventListener('submit', ev => {
+const REPO = '__REPO__', KEY = 'vfrcheck.token';
+const $ = s => document.querySelector(s);
+const getToken = () => { try { return localStorage.getItem(KEY) || ''; } catch (e) { return ''; } };
+const setToken = t => { try { t ? localStorage.setItem(KEY, t) : localStorage.removeItem(KEY); } catch (e) {} };
+
+function toast(msg, ok = true) {
+  const t = $('#toast'); t.textContent = msg; t.className = ok ? 'ok' : 'err'; t.hidden = false;
+  clearTimeout(t._h); t._h = setTimeout(() => t.hidden = true, 8000);
+}
+
+async function gh(path, opts = {}) {
+  const token = getToken();
+  if (!token) { $('#dlg-set').showModal(); throw new Error('Bitte zuerst das GitHub-Token hinterlegen.'); }
+  const r = await fetch(`https://api.github.com/repos/${REPO}${path}`, {...opts,
+    headers: {Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json'}});
+  if (r.status === 404 && opts.method === undefined) return null;
+  if (!r.ok) throw new Error(`GitHub ${r.status}: ${(await r.json().catch(() => ({}))).message || ''}`);
+  return r.status === 204 ? null : r.json();
+}
+
+const b64 = text => btoa(unescape(encodeURIComponent(text)));
+
+async function putFile(path, base64, message) {
+  const old = await gh(`/contents/${path}`);
+  return gh(`/contents/${path}`, {method: 'PUT', body: JSON.stringify({message, content: base64, sha: old && old.sha})});
+}
+
+async function deleteFile(path, message) {
+  const old = await gh(`/contents/${path}`);
+  if (old) await gh(`/contents/${path}`, {method: 'DELETE', body: JSON.stringify({message, sha: old.sha})});
+}
+
+// „Jetzt prüfen“: vollständigen Lauf auslösen und für diese Flüge sofort benachrichtigen
+const runNow = check => gh('/dispatches', {method: 'POST',
+  body: JSON.stringify({event_type: 'tick', client_payload: {full: true, check}})});
+
+function reloadSoon() {
+  toast('Lauf gestartet – die Seite aktualisiert sich in etwa 3 Minuten.');
+  setTimeout(() => location.reload(), 180000);
+}
+
+const readBase64 = file => new Promise((res, rej) => {
+  const fr = new FileReader(); fr.onload = () => res(fr.result.split(',')[1]); fr.onerror = rej; fr.readAsDataURL(file);
+});
+
+$('#f').addEventListener('submit', async ev => {
   ev.preventDefault();
-  const d = Object.fromEntries(new FormData(ev.target));
-  const route = d.route.split('\\n').map(s => s.trim()).filter(Boolean).map(l => {
+  const form = ev.target, d = Object.fromEntries(new FormData(form));
+  const gpx = form.gpxfile.files[0];
+  const route = d.route.split('\n').map(s => s.trim()).filter(Boolean).map(l => {
     const p = l.split(',').map(s => s.trim());
     if (p.length === 1) return '  - ' + p[0].toUpperCase();
     let s = `  - {lat: ${p[0]}, lon: ${p[1]}`;
@@ -133,16 +197,70 @@ document.getElementById('f').addEventListener('submit', ev => {
     if (p[3]) s += `, alt_ft: ${p[3]}`;
     return s + '}';
   });
-  if (!d.gpx && route.length < 2) { alert('Mindestens zwei Wegpunkte oder eine GPX-Datei angeben'); return; }
+  if (!gpx && route.length < 2) { toast('Mindestens zwei Wegpunkte oder eine GPX-Datei angeben.', false); return; }
+  const stem = d.dep.slice(0, 16).replace(/[-:T]/g, '').replace(/^(\d{8})/, '$1-') + '-' + d.name.replace(/[^A-Za-z0-9]+/g, '-');
   const yaml = [`name: ${d.name}`, `departure: ${d.dep}:00Z   # UTC`, `tas_kt: ${d.tas}`, `cruise_alt_ft: ${d.alt}`,
-    d.gpx ? `gpx: ${d.gpx}` : 'route:\\n' + route.join('\\n'),
+    gpx ? `gpx: ${stem}.gpx` : 'route:\n' + route.join('\n'),
     'minima:', ...['vis_m', 'ceiling_ft_agl', 'max_gust_kt', 'terrain_clearance_ft'].map(k => `  ${k}: ${d[k]}`),
     'performance:', ...['climb_fpm', 'climb_tas_kt', 'descent_fpm', 'ceiling_ft'].filter(k => d[k]).map(k => `  ${k}: ${d[k]}`)
-  ].join('\\n') + '\\n';
-  const file = d.dep.slice(0, 16).replace(/[-:T]/g, '').replace(/^(\\d{8})/, '$1-') + '-' + d.name.replace(/[^A-Za-z0-9]+/g, '-') + '.yaml';
-  const out = document.getElementById('out'); out.hidden = false; out.textContent = yaml;
-  window.open(`https://github.com/__REPO__/new/main/flights?filename=${encodeURIComponent(file)}&value=${encodeURIComponent(yaml)}`, '_blank');
+  ].join('\n') + '\n';
+  const btn = form.querySelector('[type=submit]'); btn.disabled = true;
+  try {
+    if (gpx) await putFile(`flights/${stem}.gpx`, await readBase64(gpx), `Flug ${stem}: GPX`);
+    await putFile(`flights/${stem}.yaml`, b64(yaml), `Flug ${stem} angelegt`);  // Commit startet den Lauf
+    $('#dlg-neu').close(); form.reset();
+    addPending(stem, d.name, d.dep);
+    reloadSoon();
+  } catch (e) { toast(e.message, false); } finally { btn.disabled = false; }
 });
+
+$('#s').addEventListener('submit', ev => {
+  setToken(ev.target.token.value.trim()); toast('Token gespeichert.');
+});
+$('#forget').addEventListener('click', () => { setToken(''); $('#s').token.value = ''; toast('Token entfernt.'); });
+document.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => $(b.dataset.open).showModal()));
+document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', () => b.closest('dialog').close()));
+
+document.addEventListener('click', async ev => {
+  const b = ev.target.closest('[data-act]'); if (!b) return;
+  const stem = b.dataset.stem;
+  b.disabled = true;
+  try {
+    if (b.dataset.act === 'check') { await runNow([`flights/${stem}.yaml`]); reloadSoon(); }
+    if (b.dataset.act === 'delete') {
+      if (!confirm(`Flug ${stem} wirklich löschen?`)) return;
+      await deleteFile(`flights/${stem}.yaml`, `Flug ${stem} gelöscht`);
+      await deleteFile(`flights/${stem}.gpx`, `Flug ${stem}: GPX gelöscht`);
+      document.getElementById(stem)?.remove();
+      toast('Flug gelöscht.');
+    }
+  } catch (e) { toast(e.message, false); } finally { b.disabled = false; }
+});
+
+// Flüge, die angelegt, aber noch nicht bewertet sind, als Platzhalter zeigen
+function addPending(stem, name, dep) {
+  if (document.getElementById(stem)) return;
+  const a = document.createElement('article');
+  a.className = 'card pending'; a.id = stem;
+  a.innerHTML = `<header><div><h2></h2><div class="muted"></div></div><div class="prob"><span class="cat">wird bewertet …</span></div></header>`;
+  a.querySelector('h2').textContent = name;
+  a.querySelector('.muted').textContent = dep ? `Abflug ${dep.replace('T', ' ').slice(0, 16)} UTC` : stem;
+  $('#flights').prepend(a);
+}
+
+(async () => {
+  try {
+    const r = await fetch(`https://api.github.com/repos/${REPO}/contents/flights`,
+      getToken() ? {headers: {Authorization: `Bearer ${getToken()}`}} : {});
+    if (!r.ok) return;
+    for (const f of await r.json()) {
+      const m = f.name.match(/^(.*)\.yaml$/);
+      const t = m && m[1].match(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})/);
+      const past = t && new Date(Date.UTC(t[1], t[2] - 1, t[3], t[4], t[5])) < Date.now() - 3600e3;
+      if (m && !past && !document.getElementById(m[1]) && !m[1].startsWith('beispiel')) addPending(m[1], m[1], '');
+    }
+  } catch (e) {}
+})();
 </script>"""
 
 CSS = """
@@ -169,7 +287,16 @@ details{margin-top:10px}summary{cursor:pointer;color:var(--acc)}
 form{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--muted)}
 .wide{grid-column:1/-1}.row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:8px}
 input,textarea{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px}
-button{font:inherit;font-weight:600;padding:10px;border:0;border-radius:8px;background:var(--acc);color:#fff;cursor:pointer}
+button,.btn{font:inherit;font-weight:600;padding:9px 14px;border:1px solid var(--acc);border-radius:8px;background:var(--acc);color:#fff;cursor:pointer;text-decoration:none;display:inline-block}
+button:disabled{opacity:.5;cursor:wait}.ghost{background:transparent;color:var(--acc)}.danger{color:var(--nogo);border-color:var(--nogo)}
+.row2{display:flex;gap:8px;align-items:center}.top{align-items:center}
+.actions{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-top:12px;border-top:1px solid var(--line);padding-top:12px}
+.actions button,.actions .btn{padding:6px 12px;font-size:14px}
+dialog{max-width:760px;width:calc(100% - 32px);color:var(--fg)}dialog::backdrop{background:rgba(0,0,0,.45)}
+dialog header{display:flex;justify-content:space-between;align-items:center}dialog header button{padding:4px 10px}
+.pending{opacity:.75;border-style:dashed}
+#toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);padding:10px 16px;border-radius:10px;color:#fff;max-width:calc(100% - 32px);z-index:10}
+#toast.ok{background:var(--go)}#toast.err{background:var(--nogo)}
 @media (max-width:700px){.grid,form,.row{grid-template-columns:1fr}.prob .num{font-size:30px}}
 """
 
@@ -191,10 +318,10 @@ def build(results, out):
 <html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>vfrcheck</title><meta http-equiv="refresh" content="900"><style>{CSS}</style></head>
 <body><main>
-<div class="top"><h1>vfrcheck</h1><span class="muted small">Stand {now:%d.%m.%Y %H:%M} UTC · aktualisiert stündlich ·
-  <a href="#neu">Neuer Flug</a> · <a href="https://github.com/{REPO}">GitHub</a></span></div>
+<div class="top"><div><h1>vfrcheck</h1><span class="muted small">Stand {now:%d.%m.%Y %H:%M} UTC · aktualisiert stündlich</span></div>
+  <span class="row2"><button data-open="#dlg-neu">+ Neuer Flug</button><button class="ghost" data-open="#dlg-set" title="Einstellungen">⚙</button></span></div>
 <nav class="overview">{chips}</nav>
-{body}
+<div id="flights">{body}</div>
 {FORM.replace('__REPO__', REPO)}
 <p class="muted small">Ensemble-Daten: Open-Meteo (ICON-EPS, ECMWF-ENS), Schnitt: ICON-D2; METAR/TAF: aviationweather.gov.
 Kein Ersatz für ein offizielles Briefing – die Entscheidung trifft der PIC.</p>

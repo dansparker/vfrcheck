@@ -270,6 +270,11 @@ def main():
     created, forced = set(), set()
     if not args.dry_run:
         created, forced = telegram_bot.process()
+    # Auslöser von der Webseite: {"full": true, "check": ["flights/x.yaml"]}
+    payload = {}
+    if os.environ.get("GITHUB_EVENT_NAME") == "repository_dispatch" and os.environ.get("GITHUB_EVENT_PATH"):
+        payload = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text()).get("client_payload") or {}
+    forced |= set(payload.get("check") or [])
     if args.files:
         files = args.files
     else:
@@ -279,6 +284,7 @@ def main():
         now = dt.datetime.now(dt.timezone.utc)
         last = STATE_DIR / "last_full_check.txt"
         hourly = (os.environ.get("GITHUB_EVENT_NAME") not in ("schedule", "repository_dispatch") or not last.exists()
+                  or payload.get("full")
                   or now - dt.datetime.fromisoformat(last.read_text().strip()) >= dt.timedelta(minutes=55))
         if hourly and not args.dry_run:
             STATE_DIR.mkdir(exist_ok=True)
