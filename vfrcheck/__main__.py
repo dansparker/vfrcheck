@@ -153,26 +153,40 @@ def evaluate(points, fl, sec, wx, terrain):
 def alternatives(points, fl, sec, wx, terrain, planned):
     """Wahrscheinlichkeit bei früherem/späterem Abflug (gleiches Profil, gleiche Wetterdaten)."""
     now = dt.datetime.now(dt.timezone.utc)
-    cells, best = [], None
-    for h in ALT_OFFSETS_H:
+    cells, options = [], []
+    for h in sorted(ALT_OFFSETS_H + [0]):
         shifted = copy.deepcopy(points)
         for p in shifted:
             p.eta += dt.timedelta(hours=h)
         if shifted[0].eta < now:
             continue
-        prob = evaluate(shifted, fl, sec, wx, terrain)
+        label = "geplant" if h == 0 else "morgen" if h == 24 else f"{h:+d} h".replace("-", "−")
+        head = f"{label} ({shifted[0].eta:%H:%M}Z)"
+        if not daylight_ok(shifted):
+            cells.append(f"{head}: Nacht")
+            continue
+        prob = planned if h == 0 else evaluate(shifted, fl, sec, wx, terrain)
         if prob is None:
             continue
-        label = "morgen" if h == 24 else f"{h:+d} h"
-        cells.append(f"{label} ({shifted[0].eta:%H:%M}Z): {prob:.0f}%")
-        if best is None or prob > best[1]:
-            best = (label, prob, shifted[0].eta)
+        cells.append(f"{head}: {prob:.0f}%")
+        if h:
+            options.append((prob, -abs(h), label, shifted[0].eta))
     if not cells:
         return []
     lines = ["- " + " · ".join(cells)]
-    if best and planned is not None and best[1] >= planned + 10:
-        lines.append(f"- 💡 besser: {best[0]} – Abflug {best[2]:%d.%m. %H:%M}Z mit {best[1]:.0f}% statt {planned:.0f}%")
+    if options and planned is not None:
+        prob, _, label, eta = max(options)  # beste Wahrscheinlichkeit, bei Gleichstand die nächstliegende Zeit
+        if prob >= planned + 10:
+            lines.append(f"- 💡 besser: {label} – Abflug {eta:%d.%m. %H:%M}Z mit {prob:.0f}% statt {planned:.0f}%")
     return lines
+
+
+def daylight_ok(points):
+    """Abflug nach Beginn und Landung vor Ende der bürgerlichen Dämmerung."""
+    dep, arr = points[0], points[-1]
+    tw_dep = sun.civil_twilight(dep.eta.date(), dep.lat, dep.lon)
+    tw_arr = sun.civil_twilight(arr.eta.date(), arr.lat, arr.lon)
+    return (not tw_dep or dep.eta >= tw_dep[0]) and (not tw_arr or arr.eta <= tw_arr[1])
 
 
 def alternate_notes(fl, points):

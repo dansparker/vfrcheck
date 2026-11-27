@@ -68,7 +68,7 @@ def _card(r):
     probs = "".join(f"<li>{e(x[2:])}</li>" for x in r["problems"]) or "<li class=muted>keine auffälligen Stellen</li>"
     alts = "".join(f"<li>{e(x.strip(' -·'))}</li>" for x in r["altitudes"])
     notes = "".join(f"<section><h3>{e(title.rstrip(':'))}</h3><ul>"
-                    + "".join(f"<li{' class=warn' if '⚠' in x else ''}>{e(x.lstrip('- '))}</li>" for x in items)
+                    + "".join(f"<li{' class=warn' if '⚠' in x else ''}>{e(x[2:] if x.startswith('- ') else x)}</li>" for x in items)
                     + "</ul></section>" for title, items in r.get("notes", []) if items)
     wx = "".join(f"<pre>{e(d[k])}</pre>" for d in r["metars"].values() for k in ("metar", "taf") if d.get(k))
     return f"""
