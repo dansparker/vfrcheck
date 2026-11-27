@@ -17,6 +17,7 @@ SHORT = {"Sicht": "Sicht", "Ceiling": "Wolken tief", "Wolkenbasis": "Wolken", "B
 GREEN, YELLOW, RED = "#2e9d4a", "#f2b705", "#d62f2f"
 LEVEL_COLOR = [GREEN, YELLOW, RED]
 SKY = "#eef5fb"
+BAND = "#fde047"  # möglicher Flughöhenbereich
 # Bewölkung je Druckfläche: Klassen ähnlich FEW/SCT/BKN/OVC
 CLOUD_LEVELS = [25, 50, 75, 90, 101]
 CLOUD_COLORS = ["#dfe3e8", "#bcc3cc", "#959eaa", "#6f7985"]
@@ -142,8 +143,8 @@ def render(fl, points, res, profs, legs, spaces=()):
     if all(bands):
         lo = np.array([b[0] for b in bands])
         hi = np.clip([b[1] for b in bands], 0, ymax)
-        ax.fill_between(x, lo, hi, where=hi >= lo, color=GREEN, alpha=0.13, zorder=1)
-        handles.append(mpatches.Patch(color=GREEN, alpha=0.3, label="mögliche Flughöhen"))
+        ax.fill_between(x, lo, hi, where=hi >= lo, color=BAND, alpha=0.35, zorder=1)
+        handles.append(mpatches.Patch(color=BAND, alpha=0.5, label="mögliche Flughöhen"))
 
     # --- Gelände ---
     ter = np.array([r.get("terrain_ft") or np.nan for r in res["points"]], dtype=float)
@@ -188,7 +189,7 @@ def render(fl, points, res, profs, legs, spaces=()):
     fig.text(0.01, -0.06,
              "So liest du die Grafik: Oben die Ampel – grün = unkritisch, gelb = Vorsicht (20–50 % der Wetterszenarien "
              "kritisch oder Vereisung), rot = kritisch (≥ 50 %, ICON-Wolken auf dem Flugweg/zu tief oder zu nah am Gelände).\n"
-             "Grau = Wolken aus dem ICON-Modell (je dunkler, desto dichter). Grün = Höhenbereich zwischen "
+             "Grau = Wolken aus dem ICON-Modell (je dunkler, desto dichter). Gelb = möglicher Höhenbereich zwischen "
              "Gelände + Abstand und Wolkenbasis. Violette Fahnen = Wind je Höhe (langer Strich 10 kt, kurzer 5 kt).",
              fontsize=8, color="#374151", va="top")
 
