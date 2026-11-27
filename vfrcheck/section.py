@@ -10,6 +10,9 @@ from .weather import LEVELS
 ICING_CLOUD = 50        # % Bewölkung auf der Druckfläche
 ICING_T = (-10, 0)      # °C
 LAYER_CLOUD = 50        # % Bedeckung auf einer Druckfläche, ab der sie als Wolkenschicht zählt
+BKN_CLOUD = 62          # ab hier (5/8) zählt eine Schicht als Ceiling bzw. nicht durchfliegbar
+ICON_WEIGHT_SHORT = 0.35  # Gewicht von ICON in der Wahrscheinlichkeit bis 48 h (ICON-D2, 2 km)
+ICON_WEIGHT_LONG = 0.20   # danach (ICON-EU/global)
 ON_TOP_MAX_FT = 10000   # VFR on top nur vorschlagen, wenn die Tops darunter liegen
 LEE_WIND_KT = 25        # Wind auf Kammhöhe, ab dem Lee-/Rotorturbulenz gemeldet wird
 MOUNTAIN_FT = 3000      # Gelände, ab dem ein Abschnitt als Gebirge gilt
@@ -68,6 +71,38 @@ def cloud_layers(prof, thresh=LAYER_CLOUD):
         else:
             layers.append([lo, hi, c[i]])
     return [tuple(l) for l in layers]
+
+
+def apply_icon(res, points, profs, fl, sec):
+    """ICON-Wolkenschichten in die Bewertung einrechnen (erkennt Hochnebel/Stratus, den die
+    Ensemble-Schätzung über die Taupunktdifferenz oft übersieht).
+    Je Punkt: tiefe BKN/OVC-Schicht unter den Ceiling-Minima oder Flugweg in/nahe einer Schicht = kritisch.
+    Gewicht: ICON-D2-Bereich (<= 48 h) 35 %, danach 20 %. Ergebnis = (1-w)·Ensemble + w·ICON."""
+    if not sec:
+        return res
+    m = fl["minima"]
+    lead_h = (points[0].eta - fl["departure"].now(points[0].eta.tzinfo)).total_seconds() / 3600
+    w = ICON_WEIGHT_SHORT if lead_h <= 48 else ICON_WEIGHT_LONG
+    icon_ok = True
+    for p, r, pr in zip(points, res["points"], profs):
+        r["icon_reasons"] = []
+        if pr is None or r.get("fail_pct") is None:
+            continue
+        ground = max(r.get("elev_ft") or 0, pr.get("elev_ft") or 0)
+        layers = [l for l in cloud_layers(pr) if l[2] >= BKN_CLOUD]
+        if layers and layers[0][0] - ground < m["ceiling_ft_agl"]:
+            r["icon_reasons"].append(f"Wolken tief (ICON) ~{max(0, layers[0][0] - ground):.0f} ft AGL")
+        elif any(b - m["clearance_ft"] < p.alt_ft < t + m["clearance_ft"] for b, t, _ in layers):
+            r["icon_reasons"].append("Flugweg in/nahe Wolken (ICON)")
+        bad = bool(r["icon_reasons"])
+        icon_ok &= not bad
+        r["fail_ens"] = r["fail_pct"]
+        r["fail_pct"] = (1 - w) * r["fail_pct"] + w * 100 * bad
+    res["icon_ok"], res["icon_weight"], res["icon_model"] = icon_ok, w, sec[0].get("model", "ICON")
+    if res["probability"] is not None:
+        res["probability_ens"] = res["probability"]
+        res["probability"] = (1 - w) * res["probability"] + w * 100 * icon_ok
+    return res
 
 
 def point_gs(fl, points, profs):

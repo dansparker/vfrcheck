@@ -92,7 +92,7 @@ def problem_segments(res, legs, threshold=10):
     lines = []
     for a, b, w in sorted(segs, key=lambda s: -s[2]["fail_pct"])[:8]:
         where = legs[a.leg]["name"] if legs else a.name
-        why = ", ".join(f"{k} {v:.0f}%" for k, v in list(w["reasons"].items())[:3])
+        why = ", ".join(w.get("icon_reasons", []) + [f"{k} {v:.0f}%" for k, v in list(w["reasons"].items())[:3]])
         lines.append(f"- {where}, NM {a.dist:.0f}–{b.dist:.0f} ({a.eta:%H:%M}–{b.eta:%H:%M}Z): "
                      f"bis {w['fail_pct']:.0f}% kritisch – {why}")
     return lines
@@ -101,7 +101,10 @@ def problem_segments(res, legs, threshold=10):
 def report(fl, res, metars, legs=(), notes=()):
     p = res["probability"]
     lines = [f"Flug {fl['name']} – Abflug {fl['departure']:%Y-%m-%d %H:%M} UTC, {fl['cruise_alt_ft']} ft",
-             f"VFR-Wahrscheinlichkeit: {p:.0f}% ({category(p)}), {res['members']} Ensemble-Member"
+             f"VFR-Wahrscheinlichkeit: {p:.0f}% ({category(p)})" + (
+                 f" = {100 - res['icon_weight'] * 100:.0f}% Ensemble ({res['probability_ens']:.0f}%, {res['members']} Member)"
+                 f" + {res['icon_weight'] * 100:.0f}% ICON ({'unkritisch' if res['icon_ok'] else 'kritisch'})"
+                 if "probability_ens" in res else f", {res['members']} Ensemble-Member")
              if p is not None else "Außerhalb des Vorhersagezeitraums (max. ~15 Tage)", ""]
     lines += altitudes(fl, res)
     if legs:
@@ -198,6 +201,7 @@ def run(path, args, force=False):
             profs = section.profiles(points, sec)
     det_bases = [(section.cloud_layers(pr) or [(None,)])[0][0] if pr is not None else None for pr in profs]
     res = assess.assess(points, ensemble_for(points, sec, ter["point"] if ter else None), fl["minima"], terrain, det_bases)
+    section.apply_icon(res, points, profs, fl, sec)
     icaos = [w["icao"] for w in fl["waypoints"] if w.get("icao")]
     legs = section.legs(fl, points, profs, terrain)
     metars = weather.metar_taf(icaos)
