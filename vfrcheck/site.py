@@ -2,6 +2,7 @@
 import datetime as dt
 import json
 import os
+import re
 from html import escape as e
 from pathlib import Path
 
@@ -28,6 +29,11 @@ def _spark(history):
             f'<line x1="0" x2="{w}" y1="{h * .5}" y2="{h * .5}" class="ref"/>'
             f'<polyline points="{pts}"/></svg>'
             f'<div class="muted small">Verlauf seit {history[0][0][5:16].replace("T", " ")} UTC</div>')
+
+
+def _links(text):
+    """Text escapen und Adressen klickbar machen (z.B. Webcam-Links)."""
+    return re.sub(r"(https?://\S+)", r'<a href="" target="_blank" rel="noopener">Webcam ↗</a>', e(text))
 
 
 def _h(ft):
@@ -88,7 +94,7 @@ def _card(r):
     probs = "".join(f"<li>{e(x[2:])}</li>" for x in r["problems"]) or "<li class=muted>keine auffälligen Stellen</li>"
     alts = "".join(f"<li>{e(x.strip(' -·'))}</li>" for x in r["altitudes"])
     notes = _alt_table(r.get("alternatives")) + "".join(f"<section><h3>{e(title.rstrip(':'))}</h3><ul>"
-                    + "".join(f"<li{' class=warn' if '⚠' in x else ''}>{e(x[2:] if x.startswith('- ') else x)}</li>" for x in items)
+                    + "".join(f"<li{' class=warn' if '⚠' in x else ''}>{_links(x[2:] if x.startswith('- ') else x)}</li>" for x in items)
                     + "</ul></section>" for title, items in r.get("notes", [])
                     if items and not (title.startswith("Alternative") and r.get("alternatives")))
     wx = "".join(f"<pre>{e(d[k])}</pre>" for d in r["metars"].values() for k in ("metar", "taf") if d.get(k))

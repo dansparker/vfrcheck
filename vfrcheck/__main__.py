@@ -11,7 +11,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import airspace, assess, chart, gramet, notify, route, section, site, sun, telegram_bot, verify, weather
+from . import airspace, assess, chart, gramet, notify, route, section, site, sun, telegram_bot, verify, weather, webcams
 from . import terrain as terrain_mod
 
 STATE_DIR = Path("state")
@@ -300,6 +300,7 @@ def run(path, args, force=False):
     notes = [("Datenlage:", degraded),
              ("Alternative Abflugzeiten:", alternative_lines(alt_rows, alt_best, res["probability"])),
              ("Ausweichplatz:", alt_lines),
+             ("Webcams (Windy):", optional("Webcams", lambda: webcams.lines(fl, points, altn), [])),
              ("Luftraum entlang der Strecke (openAIP):", airspace.airspace_lines(spaces)),
              ("NOTAMs (autorouter):", optional("NOTAMs", lambda: airspace.notams(fl, points), [])),
              ("Steig-/Sinkflug:", route.profile_notes(points, fl, track)),

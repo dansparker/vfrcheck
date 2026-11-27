@@ -93,6 +93,7 @@ Einstellungen → *Secrets and variables* → *Actions* → *New repository secr
 | **Telegram** (empfohlen) | `TELEGRAM_BOT_TOKEN` (von [@BotFather](https://t.me/BotFather)), `TELEGRAM_CHAT_ID` (dem Bot schreiben, dann `https://api.telegram.org/bot<TOKEN>/getUpdates` öffnen) |
 | **E-Mail** | `SMTP_HOST` (GMX: `mail.gmx.net`), `SMTP_PORT` (587), `SMTP_USER`, `SMTP_PASS`, `MAIL_TO`, optional `MAIL_FROM`. Bei GMX muss im Webmailer der Zugriff über POP3/IMAP/SMTP aktiviert sein. |
 | **Signal** | über [CallMeBot](https://www.callmebot.com/blog/free-api-signal-send-messages/): `CALLMEBOT_PHONE`, `CALLMEBOT_APIKEY`. Kostenlos, sendet aber nur an die eigene Nummer und ohne Bild. Eine offizielle Signal-Bot-API gibt es nicht; die Alternative wäre `signal-cli` mit eigener Nummer auf einem eigenen Server. |
+| **Webcams** | `WINDY_API_KEY`: kostenloser Key auf [api.windy.com/keys](https://api.windy.com/keys) (Webcams API). Links zu Webcams bei Start, Ziel, Ausweichplatz und alle ~30 NM entlang der Strecke |
 | **Lufträume** | `OPENAIP_API_KEY`: kostenloses Konto auf [openaip.net](https://www.openaip.net), dann Profil → API Clients → Key anlegen |
 | **NOTAMs** | nutzen den autorouter-Zugang (`AUTOROUTER_USER`/`AUTOROUTER_PASS`); der API-Zugriff muss bei autorouter per Support-Anfrage freigeschaltet werden |
 | **GRAMET** | `AUTOROUTER_USER`, `AUTOROUTER_PASS` (kostenloser Account auf [autorouter.aero](https://www.autorouter.aero)) |

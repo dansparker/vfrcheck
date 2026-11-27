@@ -50,6 +50,7 @@ jobs:
           AUTOROUTER_USER: ${{ secrets.AUTOROUTER_USER }}
           AUTOROUTER_PASS: ${{ secrets.AUTOROUTER_PASS }}
           OPENAIP_API_KEY: ${{ secrets.OPENAIP_API_KEY }}
+          WINDY_API_KEY: ${{ secrets.WINDY_API_KEY }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
