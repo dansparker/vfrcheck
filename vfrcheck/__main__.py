@@ -295,7 +295,10 @@ def run(path, args, force=False):
     spaces = optional("Lufträume", lambda: airspace.check_airspaces(fl, points, ground), [])
     alt_rows, alt_best = optional("Alternativen", lambda: alternatives(points, fl, sec, wx, terrain, res["probability"]),
                                   ([], None))
-    notes = [("Alternative Abflugzeiten:", alternative_lines(alt_rows, alt_best, res["probability"])),
+    degraded = ["- ⚠ ICON-Höhenschnitt nicht verfügbar (Open-Meteo) – Wind, Wolken und Vereisung fehlen, "
+                "Wahrscheinlichkeit nur aus den Ensembles. Bitte später erneut prüfen."] if not sec else []
+    notes = [("Datenlage:", degraded),
+             ("Alternative Abflugzeiten:", alternative_lines(alt_rows, alt_best, res["probability"])),
              ("Ausweichplatz:", alt_lines),
              ("Luftraum entlang der Strecke (openAIP):", airspace.airspace_lines(spaces)),
              ("NOTAMs (autorouter):", optional("NOTAMs", lambda: airspace.notams(fl, points), [])),
@@ -315,7 +318,9 @@ def run(path, args, force=False):
     old = json.loads(state_file.read_text()) if state_file.exists() else {}
     p, old_p = res["probability"], old.get("probability")
     reason = None
-    if p is not None:
+    if p is not None and not sec and old_p is not None:
+        print("ICON fehlt – keine Änderungsmeldung, Zustand bleibt")  # sonst Fehlalarm durch fehlende Daten
+    elif p is not None:
         if old_p is None:
             reason = "Erste Bewertung"
         elif abs(p - old_p) >= fl["alert"]["delta_pct"]:
@@ -329,16 +334,16 @@ def run(path, args, force=False):
         subj = f"VFR {fl['name']}: {p:.0f}% {category(p)} ({reason})" if p is not None else f"VFR {fl['name']}"
         print("Gesendet über:", notify.send(subj, text, images()) or "keinen Kanal (nicht konfiguriert)")
     state = dict(old)
-    if p is not None:
+    if p is not None and sec:
         station = lambda w: (metars.get(w.get("icao"), {}).get("near", (None,))[0]
                              if not metars.get(w.get("icao"), {}).get("metar") else w.get("icao"))
         state["verify"] = {"name": fl["name"], "departure": points[0].eta.isoformat(), "arrival": points[-1].eta.isoformat(),
                            "dep_station": station(fl["waypoints"][0]), "dest_station": station(fl["waypoints"][-1]),
                            "vis_m": fl["minima"]["vis_m"], "ceiling_ft": fl["minima"]["ceiling_ft_agl"], "forecast": round(p)}
-    if p is not None and (reason or old_p is None):
+    if p is not None and (reason or old_p is None) and (sec or old_p is None):
         state.update(probability=p, updated=now.isoformat())
     hist = state.get("history", [])
-    if p is not None and (not hist or now - dt.datetime.fromisoformat(hist[-1][0]) >= dt.timedelta(minutes=30)):
+    if p is not None and sec and (not hist or now - dt.datetime.fromisoformat(hist[-1][0]) >= dt.timedelta(minutes=30)):
         state["history"] = (hist + [[now.isoformat(timespec="minutes"), round(p)]])[-200:]
 
     # Briefing-Mail 2 h vor Abflug (einmalig)

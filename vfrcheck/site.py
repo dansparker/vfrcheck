@@ -116,7 +116,7 @@ def _card(r):
     <tbody>{legs}</tbody>
   </table></div>
   <h3>Querschnitt</h3>
-  <a href="img/{e(r['stem'])}.png"><img src="img/{e(r['stem'])}.png" alt="Vertikalschnitt {e(fl['name'])}" loading="lazy"></a>
+  <a href="img/{e(r['stem'])}.png?v={r['checked']:%Y%m%d%H%M}"><img src="img/{e(r['stem'])}.png?v={r['checked']:%Y%m%d%H%M}" alt="Vertikalschnitt {e(fl['name'])}" loading="lazy"></a>
   <details><summary>METAR / TAF</summary>{wx or '<p class=muted>keine Daten</p>'}</details>
   <footer class="actions">
     <span class="muted small">geprüft {r['checked']:%d.%m. %H:%M} UTC · {res['members']} Ensemble-Member</span>
