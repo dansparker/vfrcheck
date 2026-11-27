@@ -17,7 +17,8 @@ SHORT = {"Sicht": "Sicht", "Ceiling": "Wolken tief", "Wolkenbasis": "Wolken", "B
 GREEN, YELLOW, RED = "#2e9d4a", "#f2b705", "#d62f2f"
 LEVEL_COLOR = [GREEN, YELLOW, RED]
 SKY = "#eef5fb"
-BAND = "#fde047"  # möglicher Flughöhenbereich
+BAND = "#fef9c3"       # möglicher Flughöhenbereich: helles Gelb …
+BAND_EDGE = "#ca8a04"  # … mit dunklerem Rand (unterscheidbar vom Ampel-Gelb)
 # Bewölkung je Druckfläche: Klassen ähnlich FEW/SCT/BKN/OVC
 CLOUD_LEVELS = [25, 50, 75, 90, 101]
 CLOUD_COLORS = ["#dfe3e8", "#bcc3cc", "#959eaa", "#6f7985"]
@@ -143,8 +144,8 @@ def render(fl, points, res, profs, legs, spaces=()):
     if all(bands):
         lo = np.array([b[0] for b in bands])
         hi = np.clip([b[1] for b in bands], 0, ymax)
-        ax.fill_between(x, lo, hi, where=hi >= lo, color=BAND, alpha=0.35, zorder=1)
-        handles.append(mpatches.Patch(color=BAND, alpha=0.5, label="mögliche Flughöhen"))
+        ax.fill_between(x, lo, hi, where=hi >= lo, facecolor=BAND, edgecolor=BAND_EDGE, lw=1.2, zorder=1)
+        handles.append(mpatches.Patch(facecolor=BAND, edgecolor=BAND_EDGE, label="mögliche Flughöhen"))
 
     # --- Gelände ---
     ter = np.array([r.get("terrain_ft") or np.nan for r in res["points"]], dtype=float)
