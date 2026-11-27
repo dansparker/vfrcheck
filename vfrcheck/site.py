@@ -1,8 +1,11 @@
 """Statische Webseite (GitHub Pages): Übersicht aller Flüge + Formular für neue Flugpläne."""
 import datetime as dt
+import json
 import os
 from html import escape as e
 from pathlib import Path
+
+import yaml
 
 REPO = os.environ.get("GITHUB_REPOSITORY", "dansparker/vfrcheck")
 COLORS = {"GO": "var(--go)", "MARGINAL": "var(--marg)", "NO-GO": "var(--nogo)"}
@@ -30,6 +33,16 @@ def _spark(history):
 def _h(ft):
     """ft auf 100 gerundet oder '–'."""
     return "–" if ft is None else f"{round(ft / 100) * 100:.0f}"
+
+
+def _raw_flight(r):
+    """Flugplan so, wie er in der Datei steht (für „Bearbeiten“), Abflug als UTC 'YYYY-MM-DDTHH:MM'."""
+    try:
+        raw = yaml.safe_load((Path("flights") / f"{r['stem']}.yaml").read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        raw = {}
+    raw["departure"] = r["fl"]["departure"].strftime("%Y-%m-%dT%H:%M")
+    return json.dumps(raw, default=str, ensure_ascii=False)
 
 
 def _card(r):
@@ -88,7 +101,7 @@ def _card(r):
     <span class="muted small">geprüft {r['checked']:%d.%m. %H:%M} UTC · {res['members']} Ensemble-Member</span>
     <span>
       <button class="ghost" data-act="check" data-stem="{e(r['stem'])}">Jetzt prüfen</button>
-      <a class="btn ghost" href="https://github.com/{REPO}/edit/main/flights/{e(r['stem'])}.yaml" target="_blank">Bearbeiten</a>
+      <button class="ghost" data-act="edit" data-stem="{e(r['stem'])}" data-flight="{e(_raw_flight(r))}">Bearbeiten</button>
       <button class="ghost danger" data-act="delete" data-stem="{e(r['stem'])}">Löschen</button>
     </span>
   </footer>
@@ -98,7 +111,7 @@ def _card(r):
 FORM = r"""
 <dialog id="dlg-neu" class="card">
   <form id="f" method="dialog">
-    <header class="wide"><h2>Neuer Flug</h2><button type="button" class="ghost" data-close>✕</button></header>
+    <header class="wide"><h2 id="f-title">Neuer Flug</h2><button type="button" class="ghost" data-close>✕</button></header>
     <label>Name <input name="name" placeholder="LOWW-LOWG" required></label>
     <label>Abflug (UTC) <input name="dep" type="datetime-local" required></label>
     <label>Höhe ft <input name="alt" type="number" value="4500" step="500" required></label>
@@ -106,7 +119,7 @@ FORM = r"""
     <label class="wide"><span>Route – ein Wegpunkt pro Zeile: ICAO oder <code>lat,lon</code> oder <code>lat,lon,Name,Höhe</code></span>
       <textarea name="route" rows="4" placeholder="LOWW&#10;47.84,16.22,Wiener Neustadt&#10;LOWG"></textarea></label>
     <label class="wide"><span>… oder GPX-Datei (Route aus SkyDemon, Garmin, autorouter …)</span>
-      <input name="gpxfile" type="file" accept=".gpx"></label>
+      <input name="gpxfile" type="file" accept=".gpx"><span id="gpx-keep" class="small" hidden></span></label>
     <details class="wide"><summary>Minima</summary>
       <div class="row">
         <label>Sicht m <input name="vis_m" type="number" value="5000"></label>
@@ -121,7 +134,7 @@ FORM = r"""
         <label>Sinkrate fpm <input name="descent_fpm" type="number" value="500"></label>
         <label>Dienstgipfelhöhe ft <input name="ceiling_ft" type="number" value="14000"></label>
       </div></details>
-    <button class="wide" type="submit">Flug anlegen und prüfen</button>
+    <button class="wide" type="submit" id="f-submit">Flug anlegen und prüfen</button>
     <p class="muted small wide">Oder per Telegram: <code>/flug LOWW LOWG 12.12. 08:00 4500</code></p>
   </form>
 </dialog>
@@ -197,19 +210,27 @@ $('#f').addEventListener('submit', async ev => {
     if (p[3]) s += `, alt_ft: ${p[3]}`;
     return s + '}';
   });
-  if (!gpx && route.length < 2) { toast('Mindestens zwei Wegpunkte oder eine GPX-Datei angeben.', false); return; }
-  const stem = d.dep.slice(0, 16).replace(/[-:T]/g, '').replace(/^(\d{8})/, '$1-') + '-' + d.name.replace(/[^A-Za-z0-9]+/g, '-');
+  const old = form._raw || null;  // gesetzt im Bearbeiten-Modus
+  const keepGpx = old && old.gpx && !gpx && route.length < 2 ? old.gpx : null;
+  if (!gpx && !keepGpx && route.length < 2) { toast('Mindestens zwei Wegpunkte oder eine GPX-Datei angeben.', false); return; }
+  const stem = old ? form._stem
+    : d.dep.slice(0, 16).replace(/[-:T]/g, '').replace(/^(\d{8})/, '$1-') + '-' + d.name.replace(/[^A-Za-z0-9]+/g, '-');
+  const PERF = ['climb_fpm', 'climb_tas_kt', 'descent_fpm', 'ceiling_ft'];
+  const perfExtra = Object.entries((old && old.performance) || {}).filter(([k]) => !PERF.includes(k));
+  const known = ['name', 'departure', 'tas_kt', 'cruise_alt_ft', 'route', 'gpx', 'minima', 'performance'];
+  const extras = Object.entries(old || {}).filter(([k]) => !known.includes(k)).map(([k, v]) => `${k}: ${JSON.stringify(v)}`);
   const yaml = [`name: ${d.name}`, `departure: ${d.dep}:00Z   # UTC`, `tas_kt: ${d.tas}`, `cruise_alt_ft: ${d.alt}`,
-    gpx ? `gpx: ${stem}.gpx` : 'route:\n' + route.join('\n'),
+    gpx ? `gpx: ${stem}.gpx` : keepGpx ? `gpx: ${keepGpx}` : 'route:\n' + route.join('\n'),
     'minima:', ...['vis_m', 'ceiling_ft_agl', 'max_gust_kt', 'terrain_clearance_ft'].map(k => `  ${k}: ${d[k]}`),
-    'performance:', ...['climb_fpm', 'climb_tas_kt', 'descent_fpm', 'ceiling_ft'].filter(k => d[k]).map(k => `  ${k}: ${d[k]}`)
+    'performance:', ...PERF.filter(k => d[k]).map(k => `  ${k}: ${d[k]}`), ...perfExtra.map(([k, v]) => `  ${k}: ${v}`),
+    ...extras
   ].join('\n') + '\n';
   const btn = form.querySelector('[type=submit]'); btn.disabled = true;
   try {
     if (gpx) await putFile(`flights/${stem}.gpx`, await readBase64(gpx), `Flug ${stem}: GPX`);
-    await putFile(`flights/${stem}.yaml`, b64(yaml), `Flug ${stem} angelegt`);  // Commit startet den Lauf
-    $('#dlg-neu').close(); form.reset();
-    addPending(stem, d.name, d.dep);
+    await putFile(`flights/${stem}.yaml`, b64(yaml), `Flug ${stem} ${old ? 'geändert' : 'angelegt'}`);  // Commit startet den Lauf
+    $('#dlg-neu').close(); resetForm();
+    if (old) document.getElementById(stem)?.classList.add('pending'); else addPending(stem, d.name, d.dep);
     reloadSoon();
   } catch (e) { toast(e.message, false); } finally { btn.disabled = false; }
 });
@@ -218,12 +239,36 @@ $('#s').addEventListener('submit', ev => {
   setToken(ev.target.token.value.trim()); toast('Token gespeichert.');
 });
 $('#forget').addEventListener('click', () => { setToken(''); $('#s').token.value = ''; toast('Token entfernt.'); });
-document.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => $(b.dataset.open).showModal()));
+function resetForm() {
+  const f = $('#f'); f.reset(); f._raw = null; f._stem = null;
+  $('#f-title').textContent = 'Neuer Flug'; $('#f-submit').textContent = 'Flug anlegen und prüfen'; $('#gpx-keep').hidden = true;
+}
+
+function openEdit(stem, raw) {
+  resetForm();
+  const f = $('#f'); f._raw = raw; f._stem = stem;
+  f.name.value = raw.name || stem; f.dep.value = raw.departure; f.alt.value = raw.cruise_alt_ft; f.tas.value = raw.tas_kt;
+  f.route.value = (raw.route || []).map(w => typeof w === 'string' ? w
+    : [w.lat, w.lon, w.name || '', w.alt_ft || ''].join(',').replace(/,+$/, '')).join('\n');
+  for (const k of ['vis_m', 'ceiling_ft_agl', 'max_gust_kt', 'terrain_clearance_ft'])
+    if (raw.minima && raw.minima[k] != null) f[k].value = raw.minima[k];
+  for (const k of ['climb_fpm', 'climb_tas_kt', 'descent_fpm', 'ceiling_ft'])
+    if (raw.performance && raw.performance[k] != null) f[k].value = raw.performance[k];
+  if (raw.gpx) { const g = $('#gpx-keep'); g.textContent = `Aktuell: ${raw.gpx} (bleibt, wenn keine neue Datei gewählt wird)`; g.hidden = false; }
+  $('#f-title').textContent = 'Flug bearbeiten'; $('#f-submit').textContent = 'Speichern und prüfen';
+  $('#dlg-neu').showModal();
+}
+
+document.querySelectorAll('[data-open]').forEach(b => b.addEventListener('click', () => {
+  if (b.dataset.open === '#dlg-neu') resetForm();
+  $(b.dataset.open).showModal();
+}));
 document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', () => b.closest('dialog').close()));
 
 document.addEventListener('click', async ev => {
   const b = ev.target.closest('[data-act]'); if (!b) return;
   const stem = b.dataset.stem;
+  if (b.dataset.act === 'edit') { openEdit(stem, JSON.parse(b.dataset.flight)); return; }
   b.disabled = true;
   try {
     if (b.dataset.act === 'check') { await runNow([`flights/${stem}.yaml`]); reloadSoon(); }
