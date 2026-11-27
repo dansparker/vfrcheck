@@ -3,6 +3,7 @@
 Aufruf:  python -m vfrcheck [--dry-run] [--force-notify] [flights/xyz.yaml ...]
 """
 import argparse
+import copy
 import datetime as dt
 import glob
 import json
@@ -10,7 +11,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import airspace, assess, chart, gramet, notify, route, section, site, sun, telegram_bot, weather
+from . import airspace, assess, chart, gramet, notify, route, section, site, sun, telegram_bot, verify, weather
 from . import terrain as terrain_mod
 
 STATE_DIR = Path("state")
@@ -119,6 +120,9 @@ def report(fl, res, metars, legs=(), notes=()):
         for kind in ("metar", "taf"):
             if d.get(kind):
                 lines.append(d[kind])
+        if d.get("near"):
+            lines.append(f"{icao}: kein METAR – nächstgelegene Station {d['near'][0]} ({d['near'][1]:.0f} NM):")
+            lines += [d[f"near_{k}"] for k in ("metar", "taf") if d.get(f"near_{k}")]
     return "\n".join(lines)
 
 
@@ -132,6 +136,62 @@ def optional(what, fn, default):
 
 
 ALPS = (45.8, 48.2, 5.8, 16.5)  # lat_min, lat_max, lon_min, lon_max
+
+
+ALT_OFFSETS_H = [-3, -2, -1, 1, 2, 3, 24]
+
+
+def evaluate(points, fl, sec, wx, terrain):
+    """Wahrscheinlichkeit für einen (ggf. zeitlich verschobenen) Satz Stützpunkte."""
+    profs = section.profiles(points, sec) if sec else [None] * len(points)
+    det = [(section.cloud_layers(pr) or [(None,)])[0][0] if pr is not None else None for pr in profs]
+    res = assess.assess(points, wx, fl["minima"], terrain, det)
+    section.apply_icon(res, points, profs, fl, sec)
+    return res["probability"]
+
+
+def alternatives(points, fl, sec, wx, terrain, planned):
+    """Wahrscheinlichkeit bei früherem/späterem Abflug (gleiches Profil, gleiche Wetterdaten)."""
+    now = dt.datetime.now(dt.timezone.utc)
+    cells, best = [], None
+    for h in ALT_OFFSETS_H:
+        shifted = copy.deepcopy(points)
+        for p in shifted:
+            p.eta += dt.timedelta(hours=h)
+        if shifted[0].eta < now:
+            continue
+        prob = evaluate(shifted, fl, sec, wx, terrain)
+        if prob is None:
+            continue
+        label = "morgen" if h == 24 else f"{h:+d} h"
+        cells.append(f"{label} ({shifted[0].eta:%H:%M}Z): {prob:.0f}%")
+        if best is None or prob > best[1]:
+            best = (label, prob, shifted[0].eta)
+    if not cells:
+        return []
+    lines = ["- " + " · ".join(cells)]
+    if best and planned is not None and best[1] >= planned + 10:
+        lines.append(f"- 💡 besser: {best[0]} – Abflug {best[2]:%d.%m. %H:%M}Z mit {best[1]:.0f}% statt {planned:.0f}%")
+    return lines
+
+
+def alternate_notes(fl, points):
+    """Ausweichplatz: Entfernung vom Ziel, ETA, Anteil kritischer Ensemble-Member am Platz."""
+    if not fl.get("alternate"):
+        return [], None
+    w = route._resolve(fl["alternate"], 0)
+    dest = points[-1]
+    d = route.dist_nm({"lat": dest.lat, "lon": dest.lon}, w)
+    eta = dest.eta + dt.timedelta(hours=d / fl["tas_kt"] + 0.1)
+    pt = route.Point(w["name"], w["lat"], w["lon"], eta, 0.0)
+    data = weather.ensemble([pt])
+    pt.alt_ft = (data[0].get("elevation") or 0) * assess.M_TO_FT + route.perf(fl)["pattern_ft"]
+    r = assess.assess([pt], data, fl["minima"])["points"][0]
+    if r["fail_pct"] is None:
+        return [f"- {w['name']}: {d:.0f} NM vom Ziel, außerhalb des Vorhersagezeitraums"], w
+    why = ", ".join(f"{k} {v:.0f}%" for k, v in list(r["reasons"].items())[:2]) or "keine auffälligen Gründe"
+    warn = "⚠ " if r["fail_pct"] >= 20 else ""
+    return [f"- {warn}{w['name']}: {d:.0f} NM vom Ziel, ETA ~{eta:%H:%M}Z, {r['fail_pct']:.0f}% kritisch – {why}"], w
 
 
 def foehn_notes(fl, points, terrain):
@@ -200,14 +260,21 @@ def run(path, args, force=False):
         if sec:
             profs = section.profiles(points, sec)
     det_bases = [(section.cloud_layers(pr) or [(None,)])[0][0] if pr is not None else None for pr in profs]
-    res = assess.assess(points, ensemble_for(points, sec, ter["point"] if ter else None), fl["minima"], terrain, det_bases)
+    wx = ensemble_for(points, sec, ter["point"] if ter else None)
+    res = assess.assess(points, wx, fl["minima"], terrain, det_bases)
     section.apply_icon(res, points, profs, fl, sec)
-    icaos = [w["icao"] for w in fl["waypoints"] if w.get("icao")]
+    alt_lines, altn = optional("Ausweichplatz", lambda: alternate_notes(fl, points), ([], None))
+    wps = fl["waypoints"] + ([altn] if altn else [])
+    icaos = list(dict.fromkeys(w["icao"] for w in wps if w.get("icao")))
+    coords = {w["icao"]: (w["lat"], w["lon"]) for w in wps if w.get("icao")}
     legs = section.legs(fl, points, profs, terrain)
-    metars = weather.metar_taf(icaos)
+    metars = weather.metar_taf(icaos, coords)
     ground = [r.get("elev_ft") for r in res["points"]]
     spaces = optional("Lufträume", lambda: airspace.check_airspaces(fl, points, ground), [])
-    notes = [("Luftraum entlang der Strecke (openAIP):", airspace.airspace_lines(spaces)),
+    notes = [("Alternative Abflugzeiten:", optional("Alternativen", lambda: alternatives(
+                 points, fl, sec, wx, terrain, res["probability"]), [])),
+             ("Ausweichplatz:", alt_lines),
+             ("Luftraum entlang der Strecke (openAIP):", airspace.airspace_lines(spaces)),
              ("NOTAMs (autorouter):", optional("NOTAMs", lambda: airspace.notams(fl, points), [])),
              ("Steig-/Sinkflug:", route.profile_notes(points, fl, track)),
              ("Tageslicht / Föhn:", sun.daylight_notes(points) + foehn_notes(fl, points, terrain))]
@@ -239,6 +306,12 @@ def run(path, args, force=False):
         subj = f"VFR {fl['name']}: {p:.0f}% {category(p)} ({reason})" if p is not None else f"VFR {fl['name']}"
         print("Gesendet über:", notify.send(subj, text, images()) or "keinen Kanal (nicht konfiguriert)")
     state = dict(old)
+    if p is not None:
+        station = lambda w: (metars.get(w.get("icao"), {}).get("near", (None,))[0]
+                             if not metars.get(w.get("icao"), {}).get("metar") else w.get("icao"))
+        state["verify"] = {"name": fl["name"], "departure": points[0].eta.isoformat(), "arrival": points[-1].eta.isoformat(),
+                           "dep_station": station(fl["waypoints"][0]), "dest_station": station(fl["waypoints"][-1]),
+                           "vis_m": fl["minima"]["vis_m"], "ceiling_ft": fl["minima"]["ceiling_ft_agl"], "forecast": round(p)}
     if p is not None and (reason or old_p is None):
         state.update(probability=p, updated=now.isoformat())
     hist = state.get("history", [])
@@ -274,6 +347,9 @@ def main():
     created, forced = set(), set()
     if not args.dry_run:
         created, forced = telegram_bot.process()
+        for entry in optional("Nachkontrolle", verify.process, []):
+            print(verify.line(entry))
+            notify.send(verify.line(entry), "\n".join(entry["metars"]) or "keine METARs im Zeitfenster")
     # Auslöser von der Webseite: {"full": true, "check": ["flights/x.yaml"]}
     payload = {}
     if os.environ.get("GITHUB_EVENT_NAME") == "repository_dispatch" and os.environ.get("GITHUB_EVENT_PATH"):

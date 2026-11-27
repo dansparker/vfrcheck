@@ -42,14 +42,33 @@ class Point:
         self.plan_ft = self.plan_ft or self.alt_ft
 
 
+AIRCRAFT = Path("aircraft")
+
+
+def load_aircraft(reg):
+    """Flugzeugprofil aircraft/<Kennzeichen>.yaml: tas_kt, performance, minima (alles optional)."""
+    p = AIRCRAFT / f"{reg.upper()}.yaml"
+    if not p.exists():
+        raise ValueError(f"Flugzeugprofil {reg} nicht gefunden (aircraft/{reg.upper()}.yaml)")
+    return yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+
+
 def load_flight(path):
     with open(path, encoding="utf-8") as f:
         fl = yaml.safe_load(f)
+    if fl.get("aircraft"):  # Werte aus dem Flugzeugprofil, Angaben im Flugplan haben Vorrang
+        ac = load_aircraft(fl["aircraft"])
+        if not fl.get("tas_kt"):
+            fl["tas_kt"] = ac.get("tas_kt")
+        fl["performance"] = {**(ac.get("performance") or {}), **(fl.get("performance") or {})}
+        fl["minima"] = {**(ac.get("minima") or {}), **(fl.get("minima") or {})}
+    if not fl.get("tas_kt"):
+        raise ValueError("tas_kt fehlt (im Flugplan oder im Flugzeugprofil angeben)")
     fl["minima"] = {**DEFAULT_MINIMA, **(fl.get("minima") or {})}
     fl.setdefault("alert", {}).setdefault("delta_pct", 15)
     fl["departure"] = _parse_time(fl["departure"])
-    if fl.get("gpx"):
-        fl["route"] = parse_gpx(Path(path).parent / fl["gpx"])
+    if fl.get("gpx") or fl.get("route_file"):
+        fl["route"] = parse_route_file(Path(path).parent / (fl.get("route_file") or fl["gpx"]))
     fl["waypoints"] = [_resolve(w, fl["cruise_alt_ft"]) for w in fl["route"]]
     return fl
 
@@ -60,9 +79,99 @@ def _parse_time(v):
     return t.replace(tzinfo=dt.timezone.utc) if t.tzinfo is None else t.astimezone(dt.timezone.utc)
 
 
+def parse_route_file(path):
+    """Route aus GPX, Garmin-Flugplan (.fpl) oder SkyDemon (.flightplan)."""
+    suffix = Path(path).suffix.lower()
+    route = parse_fpl(path) if suffix == ".fpl" else parse_skydemon(path) if suffix == ".flightplan" else parse_gpx(path)
+    for w in (route[0], route[-1]):  # Start/Ziel ohne ICAO: nächsten Flugplatz suchen (für METAR, Luftraum)
+        if not w.get("icao"):
+            icao = nearest_airport(w["lat"], w["lon"])
+            if icao:
+                w["icao"] = icao
+                if not w.get("name") or re.fullmatch(r"WP\d+", w["name"]):
+                    w["name"] = icao
+    return route
+
+
+def _local(e):
+    return e.tag.rsplit("}", 1)[-1]
+
+
+def parse_fpl(path):
+    """Garmin-Flugplan (.fpl, XML): waypoint-table + route/route-point."""
+    elems = list(ET.parse(path).getroot().iter())
+    text = lambda e, tag: next(((c.text or "").strip() for c in e if _local(c) == tag), "")
+    table = {}
+    for e in elems:
+        if _local(e) == "waypoint":
+            table[text(e, "identifier")] = (float(text(e, "lat")), float(text(e, "lon")), text(e, "type"))
+    route = []
+    for e in elems:
+        if _local(e) == "route-point":
+            ident = text(e, "waypoint-identifier")
+            if ident in table:
+                lat, lon, typ = table[ident]
+                w = {"lat": lat, "lon": lon, "name": ident}
+                if typ.upper() == "AIRPORT" and re.fullmatch(r"[A-Z]{2}[A-Z0-9]{2}", ident):
+                    w["icao"] = ident
+                route.append(w)
+    if len(route) < 2:
+        raise ValueError(f"{path}: keine Route im Garmin-Flugplan gefunden")
+    return route
+
+
+_SD_COORD = re.compile(r"([NS])(\d{2})(\d{2})(\d{2}(?:\.\d+)?)\s+([EW])(\d{3})(\d{2})(\d{2}(?:\.\d+)?)")
+
+
+def _sd_coord(s):
+    m = _SD_COORD.search(s or "")
+    if not m:
+        return None
+    lat = int(m[2]) + int(m[3]) / 60 + float(m[4]) / 3600
+    lon = int(m[6]) + int(m[7]) / 60 + float(m[8]) / 3600
+    return (-lat if m[1] == "S" else lat, -lon if m[5] == "W" else lon)
+
+
+def parse_skydemon(path):
+    """SkyDemon-Flugplan (.flightplan, XML): PrimaryRoute@Start und je Abschnitt @To (Format N474253.00 E0164415.00)."""
+    root = ET.parse(path).getroot()
+    prim = next((e for e in root.iter() if _local(e) == "PrimaryRoute"), None)
+    coords = []
+    if prim is not None:
+        coords.append(_sd_coord(prim.get("Start")))
+        coords += [_sd_coord(c.get("To")) for c in prim if c.get("To")]
+    if len([c for c in coords if c]) < 2:  # Fallback: alle Koordinaten-Attribute in Dokumentreihenfolge
+        coords = [_sd_coord(v) for e in root.iter() for v in e.attrib.values() if _SD_COORD.search(v)]
+    route = [{"lat": c[0], "lon": c[1], "name": f"WP{i}"} for i, c in enumerate(coords) if c]
+    if len(route) < 2:
+        raise ValueError(f"{path}: keine Route im SkyDemon-Flugplan gefunden")
+    return route
+
+
+def nearest_airport(lat, lon, max_nm=3):
+    """ICAO des nächsten Flugplatzes (OurAirports) innerhalb max_nm, sonst None."""
+    try:
+        r = requests.get(OURAIRPORTS, timeout=120)
+        r.raise_for_status()
+    except requests.RequestException:
+        return None
+    best = None
+    for row in csv.DictReader(io.StringIO(r.content.decode("utf-8"))):
+        if not row.get("type", "").endswith("airport"):
+            continue
+        try:
+            d = dist_nm({"lat": lat, "lon": lon}, {"lat": float(row["latitude_deg"]), "lon": float(row["longitude_deg"])})
+        except ValueError:
+            continue
+        code = row.get("icao_code") or row.get("gps_code") or row.get("ident")
+        if d <= max_nm and re.fullmatch(r"[A-Z]{2}[A-Z0-9]{2}", code or "") and (best is None or d < best[1]):
+            best = (code, d)
+    return best[0] if best else None
+
+
 def parse_gpx(path):
     """Wegpunkte aus GPX: Route (rtept), sonst Wegpunkte (wpt), sonst Track (trkpt, ausgedünnt)."""
-    local = lambda e: e.tag.rsplit("}", 1)[-1]
+    local = _local
     elems = list(ET.parse(path).getroot().iter())
     for tag in ("rtept", "wpt", "trkpt"):
         pts = [e for e in elems if local(e) == tag]

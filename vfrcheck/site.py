@@ -115,11 +115,13 @@ FORM = r"""
     <label>Name <input name="name" placeholder="LOWW-LOWG" required></label>
     <label>Abflug (UTC) <input name="dep" type="datetime-local" required></label>
     <label>Höhe ft <input name="alt" type="number" value="4500" step="500" required></label>
-    <label>TAS kt <input name="tas" type="number" value="100" required></label>
+    <label>TAS kt <input name="tas" type="number" placeholder="aus Flugzeugprofil"></label>
+    <label>Flugzeug (Kennzeichen) <input name="aircraft" placeholder="D-EABC, optional" pattern="[A-Za-z]{1,2}-[A-Za-z0-9]{2,5}"></label>
+    <label>Ausweichplatz <input name="alternate" placeholder="ICAO, optional" pattern="[A-Za-z]{2}[A-Za-z0-9]{2}"></label>
     <label class="wide"><span>Route – ein Wegpunkt pro Zeile: ICAO oder <code>lat,lon</code> oder <code>lat,lon,Name,Höhe</code></span>
       <textarea name="route" rows="4" placeholder="LOWW&#10;47.84,16.22,Wiener Neustadt&#10;LOWG"></textarea></label>
-    <label class="wide"><span>… oder GPX-Datei (Route aus SkyDemon, Garmin, autorouter …)</span>
-      <input name="gpxfile" type="file" accept=".gpx"><span id="gpx-keep" class="small" hidden></span></label>
+    <label class="wide"><span>… oder Routendatei: GPX, Garmin (.fpl) oder SkyDemon (.flightplan)</span>
+      <input name="gpxfile" type="file" accept=".gpx,.fpl,.flightplan"><span id="gpx-keep" class="small" hidden></span></label>
     <details class="wide"><summary>Minima</summary>
       <div class="row">
         <label>Sicht m <input name="vis_m" type="number" value="5000"></label>
@@ -211,23 +213,29 @@ $('#f').addEventListener('submit', async ev => {
     return s + '}';
   });
   const old = form._raw || null;  // gesetzt im Bearbeiten-Modus
-  const keepGpx = old && old.gpx && !gpx && route.length < 2 ? old.gpx : null;
+  const keepGpx = old && (old.route_file || old.gpx) && !gpx && route.length < 2 ? (old.route_file || old.gpx) : null;
   if (!gpx && !keepGpx && route.length < 2) { toast('Mindestens zwei Wegpunkte oder eine GPX-Datei angeben.', false); return; }
   const stem = old ? form._stem
     : d.dep.slice(0, 16).replace(/[-:T]/g, '').replace(/^(\d{8})/, '$1-') + '-' + d.name.replace(/[^A-Za-z0-9]+/g, '-');
   const PERF = ['climb_fpm', 'climb_tas_kt', 'descent_fpm', 'ceiling_ft'];
   const perfExtra = Object.entries((old && old.performance) || {}).filter(([k]) => !PERF.includes(k));
-  const known = ['name', 'departure', 'tas_kt', 'cruise_alt_ft', 'route', 'gpx', 'minima', 'performance'];
+  const known = ['name', 'departure', 'tas_kt', 'cruise_alt_ft', 'route', 'gpx', 'route_file', 'minima', 'performance',
+                 'aircraft', 'alternate'];
+  const ext = gpx ? gpx.name.slice(gpx.name.lastIndexOf('.')).toLowerCase() : '';
+  if (!d.tas && !d.aircraft) { toast('TAS oder Flugzeug angeben.', false); return; }
   const extras = Object.entries(old || {}).filter(([k]) => !known.includes(k)).map(([k, v]) => `${k}: ${JSON.stringify(v)}`);
-  const yaml = [`name: ${d.name}`, `departure: ${d.dep}:00Z   # UTC`, `tas_kt: ${d.tas}`, `cruise_alt_ft: ${d.alt}`,
-    gpx ? `gpx: ${stem}.gpx` : keepGpx ? `gpx: ${keepGpx}` : 'route:\n' + route.join('\n'),
+  const yaml = [`name: ${d.name}`, `departure: ${d.dep}:00Z   # UTC`, `cruise_alt_ft: ${d.alt}`,
+    ...(d.tas ? [`tas_kt: ${d.tas}`] : []),
+    ...(d.aircraft ? [`aircraft: ${d.aircraft.toUpperCase()}`] : []),
+    ...(d.alternate ? [`alternate: ${d.alternate.toUpperCase()}`] : []),
+    gpx ? `route_file: ${stem}${ext}` : keepGpx ? `route_file: ${keepGpx}` : 'route:\n' + route.join('\n'),
     'minima:', ...['vis_m', 'ceiling_ft_agl', 'max_gust_kt', 'terrain_clearance_ft'].map(k => `  ${k}: ${d[k]}`),
     'performance:', ...PERF.filter(k => d[k]).map(k => `  ${k}: ${d[k]}`), ...perfExtra.map(([k, v]) => `  ${k}: ${v}`),
     ...extras
   ].join('\n') + '\n';
   const btn = form.querySelector('[type=submit]'); btn.disabled = true;
   try {
-    if (gpx) await putFile(`flights/${stem}.gpx`, await readBase64(gpx), `Flug ${stem}: GPX`);
+    if (gpx) await putFile(`flights/${stem}${ext}`, await readBase64(gpx), `Flug ${stem}: Routendatei`);
     await putFile(`flights/${stem}.yaml`, b64(yaml), `Flug ${stem} ${old ? 'geändert' : 'angelegt'}`);  // Commit startet den Lauf
     $('#dlg-neu').close(); resetForm();
     if (old) document.getElementById(stem)?.classList.add('pending'); else addPending(stem, d.name, d.dep);
@@ -247,14 +255,16 @@ function resetForm() {
 function openEdit(stem, raw) {
   resetForm();
   const f = $('#f'); f._raw = raw; f._stem = stem;
-  f.name.value = raw.name || stem; f.dep.value = raw.departure; f.alt.value = raw.cruise_alt_ft; f.tas.value = raw.tas_kt;
+  f.name.value = raw.name || stem; f.dep.value = raw.departure; f.alt.value = raw.cruise_alt_ft; f.tas.value = raw.tas_kt || '';
+  f.aircraft.value = raw.aircraft || ''; f.alternate.value = typeof raw.alternate === 'string' ? raw.alternate : '';
   f.route.value = (raw.route || []).map(w => typeof w === 'string' ? w
     : [w.lat, w.lon, w.name || '', w.alt_ft || ''].join(',').replace(/,+$/, '')).join('\n');
   for (const k of ['vis_m', 'ceiling_ft_agl', 'max_gust_kt', 'terrain_clearance_ft'])
     if (raw.minima && raw.minima[k] != null) f[k].value = raw.minima[k];
   for (const k of ['climb_fpm', 'climb_tas_kt', 'descent_fpm', 'ceiling_ft'])
     if (raw.performance && raw.performance[k] != null) f[k].value = raw.performance[k];
-  if (raw.gpx) { const g = $('#gpx-keep'); g.textContent = `Aktuell: ${raw.gpx} (bleibt, wenn keine neue Datei gewählt wird)`; g.hidden = false; }
+  const rf = raw.route_file || raw.gpx;
+  if (rf) { const g = $('#gpx-keep'); g.textContent = `Aktuell: ${rf} (bleibt, wenn keine neue Datei gewählt wird)`; g.hidden = false; }
   $('#f-title').textContent = 'Flug bearbeiten'; $('#f-submit').textContent = 'Speichern und prüfen';
   $('#dlg-neu').showModal();
 }
@@ -275,7 +285,7 @@ document.addEventListener('click', async ev => {
     if (b.dataset.act === 'delete') {
       if (!confirm(`Flug ${stem} wirklich löschen?`)) return;
       await deleteFile(`flights/${stem}.yaml`, `Flug ${stem} gelöscht`);
-      await deleteFile(`flights/${stem}.gpx`, `Flug ${stem}: GPX gelöscht`);
+      for (const s of ['.gpx', '.fpl', '.flightplan']) await deleteFile(`flights/${stem}${s}`, `Flug ${stem}: Routendatei gelöscht`);
       document.getElementById(stem)?.remove();
       toast('Flug gelöscht.');
     }
@@ -346,6 +356,15 @@ dialog header{display:flex;justify-content:space-between;align-items:center}dial
 """
 
 
+def _verification():
+    from . import verify
+    s = verify.stats()
+    if not s:
+        return '<p class="muted small">Trefferquote: noch keine nachkontrollierten Flüge.</p>'
+    return (f'<p class="muted small">Trefferquote: {s["hits"]} von {s["n"]} Flügen richtig eingeschätzt '
+            f'(≥ 50 % = VFR erwartet) · Brier-Score {s["brier"]:.2f} (0 = perfekt, 0,25 = Münzwurf)</p>')
+
+
 def build(results, out):
     (out / "img").mkdir(parents=True, exist_ok=True)
     for r in results:
@@ -368,6 +387,7 @@ def build(results, out):
 <nav class="overview">{chips}</nav>
 <div id="flights">{body}</div>
 {FORM.replace('__REPO__', REPO)}
+{_verification()}
 <p class="muted small">Ensemble-Daten: Open-Meteo (ICON-EPS, ECMWF-ENS), Schnitt: ICON-D2; METAR/TAF: aviationweather.gov.
 Kein Ersatz für ein offizielles Briefing – die Entscheidung trifft der PIC.</p>
 </main></body></html>"""

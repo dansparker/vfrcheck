@@ -1,0 +1,8 @@
+# Flugzeugprofil: Dateiname = Kennzeichen. Im Flugplan mit "aircraft: D-EABC" verwenden,
+# per Telegram mit /flugzeug D-EABC 105 500 anlegen.
+tas_kt: 105
+performance:
+  climb_fpm: 500
+  climb_tas_kt: 75
+  descent_fpm: 500
+  ceiling_ft: 14000

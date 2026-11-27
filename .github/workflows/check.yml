@@ -4,7 +4,7 @@ on:
     - cron: "*/10 * * * *"   # Telegram-Befehle alle 10 min, volle Prüfung stündlich
   push:
     branches: [main]
-    paths: ["flights/**"]  # neuer/geänderter Flugplan -> sofort prüfen (Bot-Commits lösen keinen Lauf aus)
+    paths: ["flights/**", "aircraft/**"]  # neuer/geänderter Flugplan -> sofort prüfen (Bot-Commits lösen keinen Lauf aus)
   repository_dispatch:
     types: [tick]          # externer Takt (z.B. cron-job.org), da GitHub-Cron unzuverlässig ist
   workflow_dispatch:
@@ -62,7 +62,7 @@ jobs:
         run: |
           git config user.name "vfrcheck-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add state flights
+          git add state flights aircraft
           git diff --cached --quiet || (git commit -m "state/flights update" && git pull --rebase -X theirs -q && git push)
       - uses: actions/upload-pages-artifact@v4
         if: hashFiles('site/index.html') != ''

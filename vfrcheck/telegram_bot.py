@@ -12,13 +12,19 @@ import requests
 import yaml
 
 FLIGHTS = Path("flights")
+AIRCRAFT = Path("aircraft")
 OFFSET_FILE = Path("state") / "telegram.json"
 DEFAULT_TAS = 100
+REG = re.compile(r"[A-Z]{1,2}-[A-Z0-9]{2,5}")  # Kennzeichen, z.B. D-EABC, OE-KXY
+ROUTE_FILES = (".gpx", ".fpl", ".flightplan")
 
 HELP = """vfrcheck – Befehle (Zeiten in UTC):
-/flug LOWW LOAN LOWG 12.10. 08:00 4500 [TAS]
+/flug LOWW LOAN LOWG 12.10. 08:00 4500 [TAS] [D-EABC] [altn=LOWI]
    Wegpunkte: ICAO oder lat,lon (z.B. 47.63,15.83)
-GPX-Datei senden mit Beschriftung: /flug 12.10. 08:00 4500 [TAS]
+   D-EABC = Flugzeugprofil (TAS, Steigrate …), altn = Ausweichplatz
+Routendatei (.gpx, .fpl, .flightplan) senden mit Beschriftung: /flug 12.10. 08:00 4500 [TAS] [D-EABC]
+/flugzeug D-EABC 105 500 [Steig-TAS] [Gipfelhöhe] – Profil anlegen (TAS, Steigrate fpm)
+/flugzeuge – Profile anzeigen
 /liste – geplante Flüge
 /check NAME – sofort prüfen (NAME oder Anfang davon)
 /loeschen NAME – Flug löschen
@@ -29,6 +35,13 @@ def _api(method, **kw):
     r = requests.post(f"https://api.telegram.org/bot{os.environ['TELEGRAM_BOT_TOKEN']}/{method}", timeout=60, **kw)
     r.raise_for_status()
     return r.json()["result"]
+
+
+def _extra_text(extra):
+    parts = [f"TAS {extra['tas_kt']} kt"] if "tas_kt" in extra else []
+    parts += [f"Flugzeug {extra['aircraft']}"] if "aircraft" in extra else []
+    parts += [f"Ausweichplatz {extra['alternate']}"] if "alternate" in extra else []
+    return ", ".join(parts)
 
 
 def reply(text):
@@ -69,8 +82,19 @@ def parse_flug(args, now, with_route=True):
         raise ValueError(f"Zeit nicht erkannt: {args[di + 1]} (z.B. 08:00)")
     dep = dt.datetime.combine(_date(args[di], now), dt.time(int(m[1]), int(m[2])), dt.timezone.utc)
     alt = int(args[di + 2])
-    tas = int(args[di + 3]) if len(args) > di + 3 else DEFAULT_TAS
-    return route, dep, alt, tas
+    extra = {}
+    for tok in args[di + 3:]:
+        if tok.isdigit():
+            extra["tas_kt"] = int(tok)
+        elif REG.fullmatch(tok.upper()):
+            extra["aircraft"] = tok.upper()
+        elif tok.lower().startswith("altn="):
+            extra["alternate"] = tok[5:].upper()
+        else:
+            raise ValueError(f"Unbekannte Angabe: {tok}")
+    if "tas_kt" not in extra and "aircraft" not in extra:
+        extra["tas_kt"] = DEFAULT_TAS
+    return route, dep, alt, extra
 
 
 def _write_flight(stem, data):
@@ -95,28 +119,47 @@ def _handle(msg, now):
     cmd = cmd.split("@")[0].lower()
     doc = msg.get("document")
     if cmd == "/flug" and doc:
-        if not doc.get("file_name", "").lower().endswith(".gpx"):
-            raise ValueError("Bitte eine .gpx-Datei senden")
-        _, dep, alt, tas = parse_flug(args, now, with_route=False)
+        suffix = Path(doc.get("file_name", "")).suffix.lower()
+        if suffix not in ROUTE_FILES:
+            raise ValueError("Bitte eine Routendatei senden (.gpx, .fpl oder .flightplan)")
+        _, dep, alt, extra = parse_flug(args, now, with_route=False)
         f = _api("getFile", data={"file_id": doc["file_id"]})
-        gpx = requests.get(f"https://api.telegram.org/file/bot{os.environ['TELEGRAM_BOT_TOKEN']}/{f['file_path']}",
-                           timeout=60).content
+        data = requests.get(f"https://api.telegram.org/file/bot{os.environ['TELEGRAM_BOT_TOKEN']}/{f['file_path']}",
+                            timeout=60).content
         stem = f"{dep:%Y%m%d-%H%M}-{re.sub(r'[^A-Za-z0-9]+', '-', Path(doc['file_name']).stem)[:30]}"
         FLIGHTS.mkdir(exist_ok=True)
-        (FLIGHTS / f"{stem}.gpx").write_bytes(gpx)
-        path = _write_flight(stem, {"name": stem, "departure": dep.strftime("%Y-%m-%dT%H:%MZ"), "tas_kt": tas,
-                                    "cruise_alt_ft": alt, "gpx": f"{stem}.gpx"})
-        reply(f"✈ Flug angelegt: {stem}\nAbflug {dep:%d.%m. %H:%M} UTC, {alt} ft, TAS {tas} kt – Bewertung folgt.")
+        (FLIGHTS / f"{stem}{suffix}").write_bytes(data)
+        path = _write_flight(stem, {"name": stem, "departure": dep.strftime("%Y-%m-%dT%H:%MZ"),
+                                    "cruise_alt_ft": alt, "route_file": f"{stem}{suffix}", **extra})
+        reply(f"✈ Flug angelegt: {stem}\nAbflug {dep:%d.%m. %H:%M} UTC, {alt} ft, {_extra_text(extra)} – Bewertung folgt.")
         return {path}, set()
     if cmd == "/flug":
-        route, dep, alt, tas = parse_flug(args, now)
+        route, dep, alt, extra = parse_flug(args, now)
         names = [w if isinstance(w, str) else "WPT" for w in route]
         stem = f"{dep:%Y%m%d-%H%M}-{names[0]}-{names[-1]}"
         path = _write_flight(stem, {"name": f"{names[0]}-{names[-1]}", "departure": dep.strftime("%Y-%m-%dT%H:%MZ"),
-                                    "tas_kt": tas, "cruise_alt_ft": alt, "route": route})
+                                    "cruise_alt_ft": alt, "route": route, **extra})
         reply(f"✈ Flug angelegt: {stem}\n{' → '.join(names)}\nAbflug {dep:%d.%m. %H:%M} UTC, {alt} ft, "
-              f"TAS {tas} kt – Bewertung folgt.")
+              f"{_extra_text(extra)} – Bewertung folgt.")
         return {path}, set()
+    if cmd == "/flugzeug":
+        if len(args) < 3 or not REG.fullmatch(args[0].upper()):
+            raise ValueError("Format: /flugzeug D-EABC TAS Steigrate [Steig-TAS] [Gipfelhöhe]")
+        reg, nums = args[0].upper(), [int(a) for a in args[1:]]
+        perf = {"climb_fpm": nums[1]}
+        if len(nums) > 2:
+            perf["climb_tas_kt"] = nums[2]
+        if len(nums) > 3:
+            perf["ceiling_ft"] = nums[3]
+        AIRCRAFT.mkdir(exist_ok=True)
+        (AIRCRAFT / f"{reg}.yaml").write_text(yaml.safe_dump({"tas_kt": nums[0], "performance": perf}, sort_keys=False),
+                                             encoding="utf-8")
+        reply(f"🛩 Profil {reg} gespeichert: TAS {nums[0]} kt, " + ", ".join(f"{k} {v}" for k, v in perf.items()))
+        return set(), set()
+    if cmd == "/flugzeuge":
+        lines = [f"• {p.stem}: {yaml.safe_load(p.read_text(encoding='utf-8'))}" for p in sorted(AIRCRAFT.glob("*.yaml"))]
+        reply("\n".join(lines) or "Keine Flugzeugprofile. Anlegen mit /flugzeug D-EABC 105 500")
+        return set(), set()
     if cmd == "/liste":
         lines = []
         for p in sorted(FLIGHTS.glob("*.yaml")):
@@ -129,7 +172,7 @@ def _handle(msg, now):
         return set(), {str(p)}
     elif cmd in ("/loeschen", "/löschen") and args:
         p = _find(args[0])
-        for f in (p, p.with_suffix(".gpx"), Path("state") / f"{p.stem}.json"):
+        for f in (p, *(p.with_suffix(s) for s in ROUTE_FILES), Path("state") / f"{p.stem}.json"):
             f.unlink(missing_ok=True)
         reply(f"🗑 {p.stem} gelöscht")
     elif cmd in ("/hilfe", "/help", "/start"):

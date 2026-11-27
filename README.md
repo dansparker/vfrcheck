@@ -57,6 +57,15 @@ Nur Nachrichten aus `TELEGRAM_CHAT_ID` werden angenommen.
 - **NOTAMs** (autorouter): für Flugplätze und FIRs, gültig im Flugzeitraum, nahe der Strecke und unterhalb Planhöhe + 2000 ft.
 - **Tageslicht:** Warnung bei Landung nach dem Ende der bürgerlichen Dämmerung (oder weniger als 30 min davor) und bei Abflug vor deren Beginn.
 
+## Planung und Nachkontrolle
+
+- **Alternative Abflugzeiten:** Die Wahrscheinlichkeit wird auch für −3 h bis +3 h und für morgen zur gleichen Zeit berechnet. Ist eine Alternative mindestens 10 Prozentpunkte besser, gibt es einen Hinweis „💡 besser: …“.
+- **Ausweichplatz:** `alternate: LOWI` im Flugplan (Telegram: `altn=LOWI`). Dazu kommen METAR/TAF sowie der Anteil kritischer Ensemble-Member zur voraussichtlichen Ankunftszeit am Ausweichplatz.
+- **Plätze ohne METAR** (z. B. LOIH, EDNL): Es wird die nächstgelegene Station bis 40 NM angezeigt.
+- **Flugzeugprofile:** `aircraft/<Kennzeichen>.yaml` (siehe `aircraft/BEISPIEL.yaml`) mit TAS, Leistung und optional Minima. Im Flugplan steht dann `aircraft: D-EABC`; Werte im Flugplan haben Vorrang. Telegram: `/flugzeug D-EABC 105 500 [Steig-TAS] [Gipfelhöhe]`, `/flugzeuge`, `/flug … D-EABC`.
+- **Routendateien:** GPX, Garmin `.fpl` und SkyDemon `.flightplan` (`route_file:` im Flugplan, Upload auf der Webseite oder per Telegram). Start und Ziel ohne ICAO-Namen werden dem nächsten Flugplatz (bis 3 NM) zugeordnet. Hinweis: Der SkyDemon-Import ist nur mit nachgebauten Dateien getestet.
+- **Nachkontrolle / Trefferquote:** 1 h nach der Ankunft werden die METARs von Start und Ziel (oder der Ersatzstation) zu den Flugzeiten mit deinen Minima verglichen und das Ergebnis per Telegram/E-Mail gemeldet. Gesammelt wird in `state/verification.json`; die Webseite zeigt Trefferquote und Brier-Score.
+
 ## Hosting: kostenlos mit GitHub Actions
 
 Einen eigenen Server brauchst du nicht. Der Workflow `.github/workflows/check.yml` läuft **alle 10 Minuten auf GitHub** (Telegram-Befehle; alle Flüge werden stündlich geprüft) und speichert den letzten Stand in `state/`.
