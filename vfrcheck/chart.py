@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 from matplotlib.collections import LineCollection  # noqa: E402
 
-from .section import _uv, cloud_layers, icing_levels  # noqa: E402
+from .section import _uv, cloud_layers, icing_levels, wind_at  # noqa: E402
 
 SHORT = {"Sicht": "Sicht", "Ceiling": "Wolken tief", "Wolkenbasis": "Wolken", "Böen": "Böen",
          "starker": "Regen", "Gewitter": "Gewitter"}
@@ -128,16 +128,27 @@ def render(fl, points, res, profs, legs, spaces=()):
             ice = icing_levels(profs[k])
             ax.scatter([x[k]] * len(ice), ice, marker="*", s=45, color="#1f6fd1", zorder=5)
         handles.append(plt.Line2D([], [], marker="*", ls="", color="#1f6fd1", label="Vereisungsgefahr"))
+        if not any(cloud_layers(profs[k], thresh=CLOUD_LEVELS[0]) for k in ok):
+            ax.text(x[-1] / 2, ymax * 0.55, "ICON: keine Wolken (≥ 25 %) entlang der Strecke", ha="center",
+                    fontsize=10, color="#6b7280", zorder=9, bbox={"fc": "white", "ec": "#d1d5db", "alpha": 0.85})
         frz = [(x[k], profs[k]["freezing_ft"]) for k in ok if profs[k]["freezing_ft"] is not None]
         if frz:
             ax.plot(*zip(*frz), color="#1f6fd1", ls="--", lw=1.3, zorder=5)
             handles.append(plt.Line2D([], [], color="#1f6fd1", ls="--", label="0 °C-Grenze"))
-        step = max(1, len(ok) // 15)
+        step = max(1, len(ok) // 12)
+        for k in ok[::step]:  # Wind auf der Flughöhe als Zahl (Richtung/Stärke), gut lesbar auch bei Schwachwind
+            w = wind_at(profs[k], points[k].alt_ft)
+            if w is not None:
+                spd, wdir = math.hypot(*w), math.degrees(math.atan2(-w[0], -w[1])) % 360
+                ax.text(x[k], points[k].alt_ft + 350, f"{wdir:03.0f}/{spd:.0f}", ha="center", fontsize=7.5,
+                        color="#5a3d8a", fontweight="bold", zorder=9,
+                        bbox={"fc": "white", "ec": "none", "alpha": 0.75, "pad": 1})
         for k in ok[::step]:
             pr = profs[k]
             sel = (pr["z"] <= ymax) & (pr["z"] > elev[k] + 200)
             u, v = _uv(pr["ws"][sel], pr["wd"][sel])
-            ax.barbs([x[k]] * sel.sum(), pr["z"][sel], u, v, length=5.5, lw=0.7, color="#5a3d8a", zorder=6)
+            ax.barbs([x[k]] * sel.sum(), pr["z"][sel], u, v, length=7, lw=1.1, color="#5a3d8a", zorder=6,
+                     sizes={"emptybarb": 0.12})
 
     # --- mögliche Flughöhen (Ensemble + ICON) ---
     bands = [r.get("band") for r in res["points"]]
@@ -191,7 +202,7 @@ def render(fl, points, res, profs, legs, spaces=()):
              "So liest du die Grafik: Oben die Ampel – grün = unkritisch, gelb = Vorsicht (20–50 % der Wetterszenarien "
              "kritisch oder Vereisung), rot = kritisch (≥ 50 %, ICON-Wolken auf dem Flugweg/zu tief oder zu nah am Gelände).\n"
              "Grau = Wolken aus dem ICON-Modell (je dunkler, desto dichter). Gelb = möglicher Höhenbereich zwischen "
-             "Gelände + Abstand und Wolkenbasis. Violette Fahnen = Wind je Höhe (langer Strich 10 kt, kurzer 5 kt).",
+             "Gelände + Abstand und Wolkenbasis. Violett = Wind: Zahl über dem Flugweg = Richtung/Stärke in kt, Fahnen je Höhe (langer Strich 10 kt, kurzer 5 kt, Kreis < 3 kt).",
              fontsize=8, color="#374151", va="top")
 
     buf = io.BytesIO()
