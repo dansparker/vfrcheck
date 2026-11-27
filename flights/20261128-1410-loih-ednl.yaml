@@ -1,0 +1,12 @@
+name: loih-ednl
+departure: 2026-11-28T14:10:00Z   # UTC
+tas_kt: 100
+cruise_alt_ft: 4500
+route:
+  - LOIH
+  - EDNL
+minima:
+  vis_m: 5000
+  ceiling_ft_agl: 1500
+  max_gust_kt: 25
+  terrain_clearance_ft: 1000
