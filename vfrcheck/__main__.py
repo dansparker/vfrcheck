@@ -153,7 +153,7 @@ def evaluate(points, fl, sec, wx, terrain):
 def alternatives(points, fl, sec, wx, terrain, planned):
     """Wahrscheinlichkeit bei früherem/späterem Abflug (gleiches Profil, gleiche Wetterdaten)."""
     now = dt.datetime.now(dt.timezone.utc)
-    cells, options = [], []
+    rows, options = [], []
     for h in sorted(ALT_OFFSETS_H + [0]):
         shifted = copy.deepcopy(points)
         for p in shifted:
@@ -161,23 +161,31 @@ def alternatives(points, fl, sec, wx, terrain, planned):
         if shifted[0].eta < now:
             continue
         label = "geplant" if h == 0 else "morgen" if h == 24 else f"{h:+d} h".replace("-", "−")
-        head = f"{label} ({shifted[0].eta:%H:%M}Z)"
-        if not daylight_ok(shifted):
-            cells.append(f"{head}: Nacht")
-            continue
-        prob = planned if h == 0 else evaluate(shifted, fl, sec, wx, terrain)
-        if prob is None:
-            continue
-        cells.append(f"{head}: {prob:.0f}%")
-        if h:
-            options.append((prob, -abs(h), label, shifted[0].eta))
-    if not cells:
-        return []
-    lines = ["- " + " · ".join(cells)]
+        row = {"label": label, "dep": shifted[0].eta, "arr": shifted[-1].eta, "prob": None,
+               "night": not daylight_ok(shifted), "planned": h == 0, "best": False}
+        if not row["night"]:
+            row["prob"] = planned if h == 0 else evaluate(shifted, fl, sec, wx, terrain)
+            if row["prob"] is None:
+                continue
+            if h:
+                options.append((row["prob"], -abs(h), len(rows)))
+        rows.append(row)
+    best = None
     if options and planned is not None:
-        prob, _, label, eta = max(options)  # beste Wahrscheinlichkeit, bei Gleichstand die nächstliegende Zeit
+        prob, _, i = max(options)  # beste Wahrscheinlichkeit, bei Gleichstand die nächstliegende Zeit
         if prob >= planned + 10:
-            lines.append(f"- 💡 besser: {label} – Abflug {eta:%d.%m. %H:%M}Z mit {prob:.0f}% statt {planned:.0f}%")
+            rows[i]["best"] = best = rows[i]
+    return rows, best
+
+
+def alternative_lines(rows, best, planned):
+    """Textfassung für Mail/Telegram: eine Zeile je Abflugzeit."""
+    lines = [f"- {r['label']:>8}  {r['dep']:%d.%m. %H:%M}Z  "
+             + ("Nacht" if r["night"] else f"{r['prob']:3.0f}%") + ("  ← besser" if r["best"] else "")
+             for r in rows]
+    if best:
+        lines.append(f"- 💡 besser: {best['label']} – Abflug {best['dep']:%d.%m. %H:%M}Z mit {best['prob']:.0f}% "
+                     f"statt {planned:.0f}%")
     return lines
 
 
@@ -285,8 +293,9 @@ def run(path, args, force=False):
     metars = weather.metar_taf(icaos, coords)
     ground = [r.get("elev_ft") for r in res["points"]]
     spaces = optional("Lufträume", lambda: airspace.check_airspaces(fl, points, ground), [])
-    notes = [("Alternative Abflugzeiten:", optional("Alternativen", lambda: alternatives(
-                 points, fl, sec, wx, terrain, res["probability"]), [])),
+    alt_rows, alt_best = optional("Alternativen", lambda: alternatives(points, fl, sec, wx, terrain, res["probability"]),
+                                  ([], None))
+    notes = [("Alternative Abflugzeiten:", alternative_lines(alt_rows, alt_best, res["probability"])),
              ("Ausweichplatz:", alt_lines),
              ("Luftraum entlang der Strecke (openAIP):", airspace.airspace_lines(spaces)),
              ("NOTAMs (autorouter):", optional("NOTAMs", lambda: airspace.notams(fl, points), [])),
@@ -347,7 +356,8 @@ def run(path, args, force=False):
         state_file.write_text(json.dumps(state))
     return {"stem": Path(path).stem, "fl": fl, "res": res, "legs": legs, "metars": metars, "text": text,
             "png": png, "history": state.get("history", []), "checked": now,
-            "altitudes": altitudes(fl, res)[1:-1], "problems": problem_segments(res, legs), "notes": notes}
+            "altitudes": altitudes(fl, res)[1:-1], "problems": problem_segments(res, legs), "notes": notes,
+            "alternatives": alt_rows}
 
 
 def main():

@@ -45,6 +45,26 @@ def _raw_flight(r):
     return json.dumps(raw, default=str, ensure_ascii=False)
 
 
+def _alt_table(rows):
+    """Alternative Abflugzeiten als Tabelle: Wahrscheinlichkeit farbig, geplant fett, Empfehlung markiert."""
+    if not rows:
+        return ""
+    body = ""
+    for a in rows:
+        cat = None if a["night"] else _cat(a["prob"])
+        val = "Nacht" if a["night"] else f"{a['prob']:.0f} %"
+        cls = " class=planned" if a["planned"] else " class=best" if a["best"] else ""
+        body += (f"<tr{cls}><td>{e(a['label'])}{' 💡' if a['best'] else ''}</td>"
+                 f"<td>{a['dep']:%a %d.%m.}</td><td>{a['dep']:%H:%M}Z</td><td>{a['arr']:%H:%M}Z</td>"
+                 f"<td class=pv style=\"--c:{COLORS.get(cat, 'var(--muted)')}\">{val}</td>"
+                 f"<td>{'' if a['night'] else cat}</td></tr>")
+    body = body.replace("Mon ", "Mo ").replace("Tue ", "Di ").replace("Wed ", "Mi ").replace("Thu ", "Do ") \
+               .replace("Fri ", "Fr ").replace("Sat ", "Sa ").replace("Sun ", "So ")
+    return ("<section><h3>Alternative Abflugzeiten</h3><div class=scroll><table class=alt>"
+            "<thead><tr><th></th><th>Tag</th><th>Abflug</th><th>Landung</th><th>VFR</th><th></th></tr></thead>"
+            f"<tbody>{body}</tbody></table></div></section>")
+
+
 def _card(r):
     fl, res = r["fl"], r["res"]
     p = res["probability"]
@@ -67,9 +87,10 @@ def _card(r):
         for lg in r["legs"])
     probs = "".join(f"<li>{e(x[2:])}</li>" for x in r["problems"]) or "<li class=muted>keine auffälligen Stellen</li>"
     alts = "".join(f"<li>{e(x.strip(' -·'))}</li>" for x in r["altitudes"])
-    notes = "".join(f"<section><h3>{e(title.rstrip(':'))}</h3><ul>"
+    notes = _alt_table(r.get("alternatives")) + "".join(f"<section><h3>{e(title.rstrip(':'))}</h3><ul>"
                     + "".join(f"<li{' class=warn' if '⚠' in x else ''}>{e(x[2:] if x.startswith('- ') else x)}</li>" for x in items)
-                    + "</ul></section>" for title, items in r.get("notes", []) if items)
+                    + "</ul></section>" for title, items in r.get("notes", [])
+                    if items and not (title.startswith("Alternative") and r.get("alternatives")))
     wx = "".join(f"<pre>{e(d[k])}</pre>" for d in r["metars"].values() for k in ("metar", "taf") if d.get(k))
     return f"""
 <article class="card" id="{e(r['stem'])}">
@@ -350,6 +371,8 @@ button:disabled{opacity:.5;cursor:wait}.ghost{background:transparent;color:var(-
 dialog{max-width:760px;width:calc(100% - 32px);color:var(--fg)}dialog::backdrop{background:rgba(0,0,0,.45)}
 dialog header{display:flex;justify-content:space-between;align-items:center}dialog header button{padding:4px 10px}
 .pending{opacity:.75;border-style:dashed}
+table.alt{width:auto}table.alt .pv{color:var(--c);font-weight:700;text-align:right}
+table.alt tr.planned td{font-weight:700;background:var(--bg)}table.alt tr.best td{background:color-mix(in srgb,var(--go) 12%,transparent)}
 #toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);padding:10px 16px;border-radius:10px;color:#fff;max-width:calc(100% - 32px);z-index:10}
 #toast.ok{background:var(--go)}#toast.err{background:var(--nogo)}
 @media (max-width:700px){.grid,form,.row{grid-template-columns:1fr}.prob .num{font-size:30px}}
