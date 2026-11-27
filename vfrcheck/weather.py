@@ -15,33 +15,56 @@ VARS = ["cloud_cover_low", "visibility", "temperature_2m", "dew_point_2m",
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 SECTION_MODELS = ["icon_seamless", "icon_eu", "best_match"]  # ICON-D2 (2 km) -> ICON-EU (7 km) -> Standard
 LEVELS = [1000, 975, 950, 925, 900, 850, 800, 700, 600, 500]  # hPa, bis ~FL180
-CHUNK = 50  # Orte pro Anfrage
+CHUNK = 25  # Orte pro Anfrage
 
 
-# Zeitfenster um den Flug: genug für alternative Abflugzeiten (−3 h … +3 h, nächster Tag)
-PAD_START_H, PAD_END_H = 4, 28
+# Zeitfenster (Stunden relativ zu erster/letzter ETA): um den Flug (−3 h … +3 h Alternativen, Windkorrektur)
+# und derselbe Zeitraum am nächsten Tag. Zwei kleine Abfragen statt einer großen (sonst Timeouts).
+WINDOWS = [(-4, 4), (23, 25)]
 
 
-def _get(url, points, params, pad_end_h=PAD_END_H, pad_start_h=PAD_START_H):
-    """Abfrage für viele Orte, nur Stunden rund um den Flug; liefert eine Antwort pro Punkt."""
-    start = min(p.eta for p in points) - dt.timedelta(hours=pad_start_h)
-    end = max(p.eta for p in points) + dt.timedelta(hours=pad_end_h)
-    out = []
-    for i in range(0, len(points), CHUNK):
-        part = points[i:i + CHUNK]
-        r = requests.get(url, params={
-            "latitude": ",".join(f"{p.lat:.4f}" for p in part),
-            "longitude": ",".join(f"{p.lon:.4f}" for p in part),
-            "start_hour": start.strftime("%Y-%m-%dT%H:00"),
-            "end_hour": end.strftime("%Y-%m-%dT%H:00"),
-            "wind_speed_unit": "kn", "timezone": "UTC", **params}, timeout=120)
-        if r.status_code == 429:  # Open-Meteo-Limit: einmal warten und wiederholen
+def _request(url, params):
+    """GET mit einer Wiederholung bei Limit (429) oder Zeitüberschreitung."""
+    for attempt in range(2):
+        try:
+            r = requests.get(url, params=params, timeout=90)
+        except requests.Timeout:
+            if attempt:
+                raise
+            continue
+        if r.status_code == 429 and not attempt:
             time.sleep(65)
-            r = requests.get(r.url, timeout=120)
+            continue
         r.raise_for_status()
-        data = r.json()
-        out += data if isinstance(data, list) else [data]
-    return out
+        return r.json()
+
+
+def _merge(a, b):
+    """Stündliche Daten zweier Zeitfenster derselben Orte aneinanderhängen."""
+    for x, y in zip(a, b):
+        for k, v in y.get("hourly", {}).items():
+            x["hourly"][k] = (x["hourly"].get(k) or []) + v
+    return a
+
+
+def _get(url, points, params, windows=WINDOWS):
+    """Abfrage für viele Orte und Zeitfenster; liefert eine Antwort pro Punkt (Fenster zusammengefügt)."""
+    first, last = min(p.eta for p in points), max(p.eta for p in points)
+    result = None
+    for lo, hi in windows:
+        start, end = first + dt.timedelta(hours=lo), last + dt.timedelta(hours=hi)
+        out = []
+        for i in range(0, len(points), CHUNK):
+            part = points[i:i + CHUNK]
+            data = _request(url, {
+                "latitude": ",".join(f"{p.lat:.4f}" for p in part),
+                "longitude": ",".join(f"{p.lon:.4f}" for p in part),
+                "start_hour": start.strftime("%Y-%m-%dT%H:00"),
+                "end_hour": end.strftime("%Y-%m-%dT%H:00"),
+                "wind_speed_unit": "kn", "timezone": "UTC", **params})
+            out += data if isinstance(data, list) else [data]
+        result = out if result is None else _merge(result, out)
+    return result
 
 
 def ensemble(points):
@@ -61,8 +84,8 @@ def section(points):
             for d in data:
                 d["model"] = model
             return data
-        except requests.HTTPError as e:
-            print(f"Vertikalschnitt mit {model} fehlgeschlagen: {e.response.status_code}")
+        except requests.RequestException as e:
+            print(f"Vertikalschnitt mit {model} fehlgeschlagen: {e}")
     raise RuntimeError("kein Modell für den Vertikalschnitt verfügbar")
 
 
@@ -70,7 +93,7 @@ def foehn_dp(when):
     """Druckdifferenz Bozen − Innsbruck (hPa) als Föhnindex: > +4 Südföhn, < −4 Nordföhn."""
     from types import SimpleNamespace
     pts = [SimpleNamespace(lat=46.50, lon=11.35, eta=when), SimpleNamespace(lat=47.26, lon=11.39, eta=when)]
-    data = _get(FORECAST_URL, pts, {"hourly": "pressure_msl"}, pad_end_h=1, pad_start_h=1)
+    data = _get(FORECAST_URL, pts, {"hourly": "pressure_msl"}, windows=[(-1, 1)])
     key = when.replace(minute=0, second=0, microsecond=0, tzinfo=None).strftime("%Y-%m-%dT%H:%M")
     p = [d["hourly"]["pressure_msl"][d["hourly"]["time"].index(key)] for d in data]
     return None if None in p else p[0] - p[1]
