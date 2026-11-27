@@ -33,7 +33,7 @@ def _spark(history):
 
 def _links(text):
     """Text escapen und Adressen klickbar machen (z.B. Webcam-Links)."""
-    return re.sub(r"(https?://\S+)", r'<a href="" target="_blank" rel="noopener">Webcam ↗</a>', e(text))
+    return re.sub(r"(https?://\S+)", r'<a href="\1" target="_blank" rel="noopener">Webcam ↗</a>', e(text))
 
 
 def _h(ft):
