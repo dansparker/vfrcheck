@@ -74,7 +74,8 @@ def render(fl, points, res, profs, legs, spaces=()):
                                                   hi - sp["lo"], fill=False, ec=col, lw=1.2, ls="-", zorder=8))
         ax.text(sp["from"] + 0.5, min(hi, ymax * 0.93) - 150, f"{sp['type']} {sp['name']}"[:28], fontsize=7,
                 color=col, va="top", zorder=8)
-    ax.step(x, [p.alt_ft for p in points], where="pre", color="black", lw=2, label="geplante Höhe", zorder=7)
+    ax.step(x, [p.plan_ft for p in points], where="pre", color="#555", lw=1, ls="--", label="Planhöhe", zorder=7)
+    ax.plot(x, [p.alt_ft for p in points], color="black", lw=2, label="Höhenprofil (Steigen/Sinken)", zorder=7)
     ax.set_ylim(0, ymax)
     ax.set_ylabel("ft MSL")
     ax.grid(alpha=0.3)

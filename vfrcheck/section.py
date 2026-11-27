@@ -86,6 +86,15 @@ def point_gs(fl, points, profs):
     return out
 
 
+def temp_at(prof, alt_ft):
+    """Temperatur (°C) in alt_ft, zwischen Druckflächen interpoliert."""
+    ok = ~np.isnan(prof["z"]) & ~np.isnan(prof["temp"])
+    if ok.sum() < 2:
+        return None
+    o = np.argsort(prof["z"][ok])
+    return float(np.interp(alt_ft, prof["z"][ok][o], prof["temp"][ok][o]))
+
+
 def icing_levels(prof):
     """Höhen (ft) mit Vereisungsgefahr: Wolken + Temperatur zwischen -10 und 0 °C."""
     m = (prof["cloud"] >= ICING_CLOUD) & (prof["temp"] >= ICING_T[0]) & (prof["temp"] <= ICING_T[1])

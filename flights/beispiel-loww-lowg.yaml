@@ -13,5 +13,11 @@ minima:                          # optional, Defaults siehe vfrcheck/route.py
   ceiling_ft_agl: 1500
   clearance_ft: 500
   max_gust_kt: 25
+performance:                     # optional, Standardwerte siehe vfrcheck/route.py
+  climb_fpm: 500                 # Steigrate auf Meereshöhe (nimmt mit der Dichtehöhe ab)
+  climb_tas_kt: 75
+  descent_fpm: 500
+  ceiling_ft: 14000              # Dienstgipfelhöhe
+  pattern_ft: 1000               # Platzrundenhöhe über dem Zielplatz
 alert:
   delta_pct: 15                  # Benachrichtigung ab ±15 Prozentpunkten

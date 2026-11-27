@@ -33,6 +33,10 @@ class Point:
     dist: float = 0.0      # NM ab Abflug
     waypoint: bool = False
     leg: int = 0           # Index des Streckenabschnitts
+    plan_ft: float = 0.0   # geplante Höhe (alt_ft wird zum tatsächlichen Steig-/Sinkprofil)
+
+    def __post_init__(self):
+        self.plan_ft = self.plan_ft or self.alt_ft
 
 
 def load_flight(path):
@@ -123,6 +127,93 @@ def sample(fl):
         t += dt.timedelta(hours=d / tas)
         total += d
     return pts
+
+
+DEFAULT_PERF = {
+    "climb_fpm": 500,        # Steigrate auf Meereshöhe (ISA)
+    "climb_tas_kt": None,    # Steiggeschwindigkeit, Standard 75 % der Reise-TAS
+    "descent_fpm": 500,
+    "descent_tas_kt": None,  # Standard: Reise-TAS
+    "ceiling_ft": 14000,     # Dienstgipfelhöhe (Steigrate ~0)
+    "pattern_ft": 1000,      # Platzrundenhöhe über Zielplatz
+}
+
+
+def perf(fl):
+    p = {**DEFAULT_PERF, **(fl.get("performance") or {})}
+    p["climb_tas_kt"] = p["climb_tas_kt"] or round(fl["tas_kt"] * 0.75)
+    p["descent_tas_kt"] = p["descent_tas_kt"] or fl["tas_kt"]
+    return p
+
+
+def vertical_profile(points, fl, gs, dep_elev, dest_elev, temp_at=None):
+    """Höhe je Stützpunkt: Steigflug ab Platzhöhe (Steigrate sinkt mit der Dichtehöhe), Höhenwechsel zwischen
+    Abschnitten, Sinkflug auf Platzrundenhöhe am Ziel. Setzt p.alt_ft; liefert die Fluggeschwindigkeit je Punkt."""
+    pf = perf(fl)
+    wind = [g - fl["tas_kt"] for g in gs]  # Wind-Längskomponente aus der Reise-GS
+    n = len(points)
+    # Rückwärts: höchste Höhe, von der aus der Sinkflug die Platzrunde noch rechtzeitig erreicht
+    ceiling = [0.0] * n
+    ceiling[-1] = dest_elev + pf["pattern_ft"]
+    for i in range(n - 2, -1, -1):
+        d = points[i + 1].dist - points[i].dist
+        ceiling[i] = ceiling[i + 1] + pf["descent_fpm"] * 60 * d / max(30, pf["descent_tas_kt"] + wind[i + 1])
+    alt, speed = [dep_elev], [max(30, pf["climb_tas_kt"] + wind[0])]
+    for i in range(1, n):
+        d = points[i].dist - points[i - 1].dist
+        target = min(points[i].plan_ft, ceiling[i])
+        if target > alt[-1] + 1:
+            v = max(30, pf["climb_tas_kt"] + wind[i])
+            t = temp_at(i, alt[-1]) if temp_at else None
+            isa = 15 - 1.98 * alt[-1] / 1000
+            da = alt[-1] + (120 * (t - isa) if t is not None else 0)  # Dichtehöhe
+            rate = pf["climb_fpm"] * max(0.05, 1 - da / pf["ceiling_ft"])
+            alt.append(min(target, alt[-1] + rate * 60 * d / v))
+        elif target < alt[-1] - 1:
+            v = max(30, pf["descent_tas_kt"] + wind[i])
+            alt.append(max(target, alt[-1] - pf["descent_fpm"] * 60 * d / v))
+        else:
+            v = gs[i]
+            alt.append(target)
+        speed.append(v)
+    for p, a in zip(points, alt):
+        p.alt_ft = a
+    return speed
+
+
+def profile_notes(points, fl, track):
+    """TOC/TOD und Warnung, wenn das Gelände auf Kurs im Steig-/Sinkflug zu knapp wird."""
+    pf, notes = perf(fl), []
+    cruise = points[1].plan_ft if len(points) > 1 else points[0].plan_ft
+    toc = next((p for p in points if p.alt_ft >= cruise - 50), None)
+    if toc:
+        notes.append(f"Steigflug: {cruise:.0f} ft erreicht bei NM {toc.dist:.0f} ({toc.eta:%H:%M}Z) "
+                     f"mit {pf['climb_fpm']} fpm / {pf['climb_tas_kt']} kt")
+    else:
+        top = max(points, key=lambda p: p.alt_ft)
+        notes.append(f"⚠ Reiseflughöhe {cruise:.0f} ft wird nicht erreicht (max. {top.alt_ft:.0f} ft bei NM {top.dist:.0f})")
+    tod = next((p for p in reversed(points[:-1]) if p.alt_ft >= p.plan_ft - 50), None)
+    if tod:
+        notes.append(f"Sinkflug ab NM {tod.dist:.0f} ({tod.eta:%H:%M}Z) mit {pf['descent_fpm']} fpm "
+                     f"auf {points[-1].alt_ft:.0f} ft Platzrunde")
+    dep, dest = points[0], points[-1]
+    worst = None
+    for p, t in zip(points, track):
+        if t is None or p.dist - dep.dist < 1 or dest.dist - p.dist < 1:
+            continue  # unmittelbar am Platz
+        margin = p.alt_ft - t
+        if margin < 500 and (worst is None or margin < worst[1]):
+            worst = (p, margin, t)
+    if worst:
+        p, margin, t = worst
+        climbing = p.alt_ft < p.plan_ft - 50 and p.dist < dest.dist / 2
+        state = "UNTER dem Gelände" if margin < 0 else f"nur {margin:.0f} ft darüber"
+        msg = f"⚠ {'Steigflug' if climbing else 'Flugweg'}: bei NM {p.dist:.0f} {p.alt_ft:.0f} ft, Gelände auf Kurs {t:.0f} ft ({state})"
+        if climbing:
+            minutes = max(0.1, (p.eta - dep.eta).total_seconds() / 60)
+            msg += f" – nötig wären ~{(t + 500 - dep.alt_ft) / minutes:.0f} fpm oder Höhe über dem Platz gewinnen"
+        notes.append(msg)
+    return notes
 
 
 def retime(points, fl, gs):

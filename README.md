@@ -46,6 +46,7 @@ Nur Nachrichten aus `TELEGRAM_CHAT_ID` werden angenommen.
 
 ## Weitere Prüfungen
 
+- **Steig- und Sinkflug:** Das Höhenprofil startet auf Platzhöhe. Gestiegen wird mit `climb_fpm`; die Steigrate nimmt mit der Dichtehöhe (Höhe und Temperatur aus ICON) bis `ceiling_ft` ab. Zwischen Abschnitten mit verschiedener Höhe wird gestiegen bzw. gesunken, der Sinkflug endet in Platzrundenhöhe über dem Ziel. Gemeldet werden, wo die Reiseflughöhe erreicht wird (TOC) und wo der Sinkflug beginnt (TOD), außerdem eine Warnung, wenn das Gelände auf Kurs nicht mit 500 ft Abstand überstiegen wird, samt nötiger Steigrate. Wolken-, Wind-, Vereisungs- und Luftraumprüfung rechnen mit diesem Profil. Leistungsdaten im Flugplan unter `performance:` (siehe Beispiel); Telegram-Flüge nutzen die Standardwerte (500 fpm, 75 % TAS, 14000 ft).
 - **Windkorrigierte Zeiten:** Groundspeed je Stützpunkt aus dem Wind auf Planhöhe (mit Vorhaltewinkel). Damit werden Ankunftszeiten und Wetterstunden berechnet.
 - **Gelände im Korridor ±5 NM** (Copernicus-DEM 90 m, ~1,25-NM-Raster) als Untergrenze der möglichen Flughöhen. Wird pro Route in `state/terrain/` zwischengespeichert.
 - **Wolkenschichten aus ICON-Druckflächen** (Basis/Top). Sie erkennen Hochnebel und Inversionen und begrenzen das Höhenband zusätzlich zur Ensemble-Schätzung. „On top“ wird erwähnt, wenn die Tops unter 9000 ft liegen; dabei VFR-on-top-Regeln und den Rückweg beachten.

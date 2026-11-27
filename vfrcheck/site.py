@@ -110,6 +110,13 @@ FORM = """
         <label>Max. Böen kt <input name="max_gust_kt" type="number" value="25"></label>
         <label>Geländeabstand ft <input name="terrain_clearance_ft" type="number" value="1000"></label>
       </div></details>
+    <details class="wide"><summary>Flugzeugleistung (optional)</summary>
+      <div class="row">
+        <label>Steigrate fpm <input name="climb_fpm" type="number" value="500"></label>
+        <label>Steig-TAS kt <input name="climb_tas_kt" type="number" placeholder="75 % TAS"></label>
+        <label>Sinkrate fpm <input name="descent_fpm" type="number" value="500"></label>
+        <label>Dienstgipfelhöhe ft <input name="ceiling_ft" type="number" value="14000"></label>
+      </div></details>
     <button class="wide">Auf GitHub anlegen</button>
   </form>
   <pre id="out" hidden></pre>
@@ -129,7 +136,9 @@ document.getElementById('f').addEventListener('submit', ev => {
   if (!d.gpx && route.length < 2) { alert('Mindestens zwei Wegpunkte oder eine GPX-Datei angeben'); return; }
   const yaml = [`name: ${d.name}`, `departure: ${d.dep}:00Z   # UTC`, `tas_kt: ${d.tas}`, `cruise_alt_ft: ${d.alt}`,
     d.gpx ? `gpx: ${d.gpx}` : 'route:\\n' + route.join('\\n'),
-    'minima:', ...['vis_m', 'ceiling_ft_agl', 'max_gust_kt', 'terrain_clearance_ft'].map(k => `  ${k}: ${d[k]}`)].join('\\n') + '\\n';
+    'minima:', ...['vis_m', 'ceiling_ft_agl', 'max_gust_kt', 'terrain_clearance_ft'].map(k => `  ${k}: ${d[k]}`),
+    'performance:', ...['climb_fpm', 'climb_tas_kt', 'descent_fpm', 'ceiling_ft'].filter(k => d[k]).map(k => `  ${k}: ${d[k]}`)
+  ].join('\\n') + '\\n';
   const file = d.dep.slice(0, 16).replace(/[-:T]/g, '').replace(/^(\\d{8})/, '$1-') + '-' + d.name.replace(/[^A-Za-z0-9]+/g, '-') + '.yaml';
   const out = document.getElementById('out'); out.hidden = false; out.textContent = yaml;
   window.open(`https://github.com/__REPO__/new/main/flights?filename=${encodeURIComponent(file)}&value=${encodeURIComponent(yaml)}`, '_blank');

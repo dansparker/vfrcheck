@@ -147,9 +147,9 @@ def foehn_notes(fl, points, terrain):
     return [f"Föhnindex unauffällig (Δp Bozen–Innsbruck {dp:+.1f} hPa)"]
 
 
-def ensemble_for(points, sec):
+def ensemble_for(points, sec, ground_ft=None):
     """Ensembles (~25 km Gitter) nur alle ~ENS_NM abfragen und auf die dichten Stützpunkte verteilen;
-    Geländehöhe kommt aus dem feineren Modell (ICON-D2)."""
+    Geländehöhe aus dem 90-m-Geländemodell, sonst aus ICON-D2."""
     idx = [0]
     for i, p in enumerate(points):
         if p.dist - points[idx[-1]].dist >= ENS_NM or (i == len(points) - 1 and i != idx[-1]):
@@ -159,7 +159,9 @@ def ensemble_for(points, sec):
     for i, p in enumerate(points):
         j = min(range(len(idx)), key=lambda k: abs(points[idx[k]].dist - p.dist))
         w = dict(wx[j])
-        if sec and sec[i].get("elevation") is not None:
+        if ground_ft and ground_ft[i] is not None:  # Geländemodell 90 m am Punkt
+            w["elevation"] = ground_ft[i] / assess.M_TO_FT
+        elif sec and sec[i].get("elevation") is not None:
             w["elevation"] = sec[i]["elevation"]
         out.append(w)
     return out
@@ -179,13 +181,23 @@ def run(path, args, force=False):
         print(f"Vertikalschnitt nicht verfügbar: {e}")
         sec = None
     profs = section.profiles(points, sec) if sec else [None] * len(points)
-    if sec:  # ETAs mit Wind korrigieren, dann Profile zur neuen Zeit neu auslesen
-        route.retime(points, fl, section.point_gs(fl, points, profs))
-        profs = section.profiles(points, sec)
     courses = [route.course(a, b) for a, b in zip(fl["waypoints"], fl["waypoints"][1:])]
-    terrain = optional("Gelände-Korridor", lambda: terrain_mod.corridor_max(points, courses), [None] * len(points))
+    ter = optional("Gelände-Korridor", lambda: terrain_mod.corridor_max(points, courses), None)
+    terrain = ter["max"] if ter else [None] * len(points)
+    track = ter["track"] if ter else [None] * len(points)
+    # Platzhöhen: Geländemodell am Punkt, sonst ICON-Gitterhöhe
+    elev = lambda i: (ter["point"][i] if ter and ter["point"][i] is not None
+                      else (profs[i] or {}).get("elev_ft") or 0)
+    # Höhenprofil (Steigen/Sinken) und windkorrigierte ETAs, zweimal iteriert
+    for _ in range(2):
+        gs = section.point_gs(fl, points, profs) if sec else [fl["tas_kt"]] * len(points)
+        tfn = (lambda i, a: section.temp_at(profs[i], a) if profs[i] is not None else None) if sec else None
+        speed = route.vertical_profile(points, fl, gs, elev(0), elev(-1), tfn)
+        route.retime(points, fl, speed)
+        if sec:
+            profs = section.profiles(points, sec)
     det_bases = [(section.cloud_layers(pr) or [(None,)])[0][0] if pr is not None else None for pr in profs]
-    res = assess.assess(points, ensemble_for(points, sec), fl["minima"], terrain, det_bases)
+    res = assess.assess(points, ensemble_for(points, sec, ter["point"] if ter else None), fl["minima"], terrain, det_bases)
     icaos = [w["icao"] for w in fl["waypoints"] if w.get("icao")]
     legs = section.legs(fl, points, profs, terrain)
     metars = weather.metar_taf(icaos)
@@ -193,6 +205,7 @@ def run(path, args, force=False):
     spaces = optional("Lufträume", lambda: airspace.check_airspaces(fl, points, ground), [])
     notes = [("Luftraum entlang der Strecke (openAIP):", airspace.airspace_lines(spaces)),
              ("NOTAMs (autorouter):", optional("NOTAMs", lambda: airspace.notams(fl, points), [])),
+             ("Steig-/Sinkflug:", route.profile_notes(points, fl, track)),
              ("Tageslicht / Föhn:", sun.daylight_notes(points) + foehn_notes(fl, points, terrain))]
     text = report(fl, res, metars, legs, notes)
     print(text, "\n")

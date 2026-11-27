@@ -23,14 +23,17 @@ def _offset(lat, lon, brg, nm):
 
 
 def corridor_max(points, courses):
-    """Max. Geländehöhe (ft) je Stützpunkt im Korridor ±CORRIDOR_NM, inkl. halbem Weg zum Vorgänger."""
+    """Geländehöhen (ft) je Stützpunkt, inkl. halbem Weg zum Vorgänger:
+    {"max": Maximum im Korridor ±CORRIDOR_NM, "track": Maximum direkt auf der Kurslinie, "point": am Punkt}."""
     key = hashlib.sha1(json.dumps([(round(p.lat, 4), round(p.lon, 4)) for p in points]).encode()).hexdigest()[:16]
     cache = CACHE / f"{key}.json"
     if cache.exists():
-        return json.loads(cache.read_text())
+        data = json.loads(cache.read_text())
+        if isinstance(data, dict) and "point" in data:
+            return data
     out = _corridor_max(points, courses)
     CACHE.mkdir(parents=True, exist_ok=True)
-    cache.write_text(json.dumps([round(v) if v is not None else None for v in out]))
+    cache.write_text(json.dumps({k: [round(v) if v is not None else None for v in vals] for k, vals in out.items()}))
     return out
 
 
@@ -60,9 +63,14 @@ def _corridor_max(points, courses):
             r = requests.get(r.url, timeout=60)
         r.raise_for_status()
         elev += r.json()["elevation"]
-    out, k = [], 0
+    out, k = {"max": [], "track": [], "point": []}, 0
+    per_center = 1 + 2 * CROSS_STEPS  # Mittelpunkt + Querpunkte; Mittelpunkte liegen auf der Kurslinie
     for row in rows:
-        vals = [v for v in elev[k:k + len(row)] if v is not None]
-        out.append(max(vals) * M_TO_FT if vals else None)
+        vals = elev[k:k + len(row)]
+        corridor = [v for v in vals if v is not None]
+        track = [v for v in vals[::per_center] if v is not None]
+        out["max"].append(max(corridor) * M_TO_FT if corridor else None)
+        out["track"].append(max(track) * M_TO_FT if track else None)
+        out["point"].append(vals[0] * M_TO_FT if vals[0] is not None else None)
         k += len(row)
     return out
