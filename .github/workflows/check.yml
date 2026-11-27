@@ -46,6 +46,7 @@ jobs:
           CALLMEBOT_APIKEY: ${{ secrets.CALLMEBOT_APIKEY }}
           AUTOROUTER_USER: ${{ secrets.AUTOROUTER_USER }}
           AUTOROUTER_PASS: ${{ secrets.AUTOROUTER_PASS }}
+          OPENAIP_API_KEY: ${{ secrets.OPENAIP_API_KEY }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:

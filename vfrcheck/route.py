@@ -108,7 +108,7 @@ def course(a, b):
 
 
 def sample(fl):
-    """Stützpunkte alle ~sample_nm NM, ETA aus TAS (ohne Windkorrektur)."""
+    """Stützpunkte alle ~sample_nm NM, ETA zunächst aus TAS (Windkorrektur danach mit retime)."""
     wps, tas, step = fl["waypoints"], fl["tas_kt"], fl.get("sample_nm", SAMPLE_NM)
     t, total = fl["departure"], 0.0
     pts = [Point(wps[0]["name"], wps[0]["lat"], wps[0]["lon"], t, wps[0]["alt_ft"], 0.0, True)]
@@ -123,3 +123,15 @@ def sample(fl):
         t += dt.timedelta(hours=d / tas)
         total += d
     return pts
+
+
+def retime(points, fl, gs):
+    """ETAs mit Groundspeed je Stützpunkt neu berechnen (Mittel der GS an beiden Enden des Teilstücks)."""
+    t = fl["departure"]
+    points[0].eta = t
+    for i in range(1, len(points)):
+        d = points[i].dist - points[i - 1].dist
+        v = max(20.0, (gs[i - 1] + gs[i]) / 2)
+        t += dt.timedelta(hours=d / v)
+        points[i].eta = t
+    return points

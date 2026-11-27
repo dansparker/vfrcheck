@@ -30,11 +30,14 @@ def cloud_base_msl(get, elev_ft):
     return elev_ft + (max(0.0, t - td) * 400 if t is not None and td is not None else 0)
 
 
-def altitude_band(bases, elev_ft, m):
-    """Höhenband (ft MSL): unten Geländeabstand, oben Wolkenbasis, die 80 % der Member übertreffen."""
-    lower = elev_ft + m["terrain_clearance_ft"]
+def altitude_band(bases, elev_ft, m, terrain_ft=None, det_base_ft=None):
+    """Höhenband (ft MSL): unten Abstand zum höchsten Gelände im Korridor, oben die niedrigere von
+    Ensemble-Wolkenbasis (80 % der Member darüber) und ICON-Schichtbasis (erkennt Hochnebel/Inversionen)."""
+    lower = max(elev_ft, terrain_ft or 0) + m["terrain_clearance_ft"]
     ranked = sorted(b if b is not None else math.inf for b in bases)
     base = ranked[int(len(ranked) * (1 - CONFIDENCE))] if ranked else math.inf
+    if det_base_ft is not None:
+        base = min(base, det_base_ft)
     return lower, base - m["clearance_ft"], base
 
 
@@ -62,10 +65,12 @@ def check_member(get, elev_ft, alt_ft, m):
     return reasons
 
 
-def assess(points, wx, minima):
+def assess(points, wx, minima, terrain=None, det_bases=None):
     member_ok = None
     point_results = []
-    for p, w in zip(points, wx):
+    terrain = terrain or [None] * len(points)
+    det_bases = det_bases or [None] * len(points)
+    for p, w, ter, det in zip(points, wx, terrain, det_bases):
         h = w["hourly"]
         idx = hour_index(h["time"], p.eta)
         if idx is None:
@@ -88,7 +93,7 @@ def assess(points, wx, minima):
                 reasons.update(r)
         n = len(suffixes) or 1
         point_results.append({"point": p, "elev_ft": elev_ft, "fail_pct": 100 * fails / n,
-                              "band": altitude_band(bases, elev_ft, minima),
+                              "band": altitude_band(bases, elev_ft, minima, ter, det), "terrain_ft": ter,
                               "reasons": {k: 100 * v / n for k, v in reasons.most_common()}})
     covered = [r for r in point_results if r["fail_pct"] is not None]
     if not member_ok or len(covered) < len(point_results):

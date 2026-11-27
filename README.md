@@ -44,6 +44,16 @@ Nur Nachrichten aus `TELEGRAM_CHAT_ID` werden angenommen.
 
 **3. GPX**: `.gpx` (z. B. Export aus SkyDemon, Garmin, autorouter) nach `flights/` hochladen und im YAML statt `route:` `gpx: datei.gpx` angeben. Verwendet wird die Route (`rtept`), sonst die Wegpunkte (`wpt`), sonst der Track (`trkpt`). Wegpunktnamen im ICAO-Format bekommen METAR/TAF.
 
+## Weitere Prüfungen
+
+- **Windkorrigierte Zeiten:** Groundspeed je Stützpunkt aus dem Wind auf Planhöhe (mit Vorhaltewinkel). Damit werden Ankunftszeiten und Wetterstunden berechnet.
+- **Gelände im Korridor ±5 NM** (Copernicus-DEM 90 m, ~1,25-NM-Raster) als Untergrenze der möglichen Flughöhen. Wird pro Route in `state/terrain/` zwischengespeichert.
+- **Wolkenschichten aus ICON-Druckflächen** (Basis/Top). Sie erkennen Hochnebel und Inversionen und begrenzen das Höhenband zusätzlich zur Ensemble-Schätzung. „On top“ wird erwähnt, wenn die Tops unter 9000 ft liegen; dabei VFR-on-top-Regeln und den Rückweg beachten.
+- **Lee-/Rotorturbulenz**, wenn der Wind auf Kammhöhe über Gebirge ≥ 25 kt beträgt. **Föhnindex** aus der Druckdifferenz Bozen − Innsbruck (±4 hPa) für Alpenstrecken.
+- **Lufträume** (openAIP): R/D/P, CTR, TMA, TMZ/RMZ, TRA/TSA und ATZ, durch die die Strecke führt oder die bis 1000 ft über bzw. unter der Planhöhe liegen. Abgefragt werden die Länder der Flugplätze in der Route.
+- **NOTAMs** (autorouter): für Flugplätze und FIRs, gültig im Flugzeitraum, nahe der Strecke und unterhalb Planhöhe + 2000 ft.
+- **Tageslicht:** Warnung bei Landung nach dem Ende der bürgerlichen Dämmerung (oder weniger als 30 min davor) und bei Abflug vor deren Beginn.
+
 ## Hosting: kostenlos mit GitHub Actions
 
 Einen eigenen Server brauchst du nicht. Der Workflow `.github/workflows/check.yml` läuft **alle 10 Minuten auf GitHub** (Telegram-Befehle; alle Flüge werden stündlich geprüft) und speichert den letzten Stand in `state/`.
@@ -71,6 +81,8 @@ Einstellungen → *Secrets and variables* → *Actions* → *New repository secr
 | **Telegram** (empfohlen) | `TELEGRAM_BOT_TOKEN` (von [@BotFather](https://t.me/BotFather)), `TELEGRAM_CHAT_ID` (dem Bot schreiben, dann `https://api.telegram.org/bot<TOKEN>/getUpdates` öffnen) |
 | **E-Mail** | `SMTP_HOST` (GMX: `mail.gmx.net`), `SMTP_PORT` (587), `SMTP_USER`, `SMTP_PASS`, `MAIL_TO`, optional `MAIL_FROM`. Bei GMX muss im Webmailer der Zugriff über POP3/IMAP/SMTP aktiviert sein. |
 | **Signal** | über [CallMeBot](https://www.callmebot.com/blog/free-api-signal-send-messages/): `CALLMEBOT_PHONE`, `CALLMEBOT_APIKEY`. Kostenlos, sendet aber nur an die eigene Nummer und ohne Bild. Eine offizielle Signal-Bot-API gibt es nicht; die Alternative wäre `signal-cli` mit eigener Nummer auf einem eigenen Server. |
+| **Lufträume** | `OPENAIP_API_KEY`: kostenloses Konto auf [openaip.net](https://www.openaip.net), dann Profil → API Clients → Key anlegen |
+| **NOTAMs** | nutzen den autorouter-Zugang (`AUTOROUTER_USER`/`AUTOROUTER_PASS`); der API-Zugriff muss bei autorouter per Support-Anfrage freigeschaltet werden |
 | **GRAMET** | `AUTOROUTER_USER`, `AUTOROUTER_PASS` (kostenloser Account auf [autorouter.aero](https://www.autorouter.aero)) |
 
 Danach unter *Actions* → *vfrcheck* → *Run workflow* (mit „Benachrichtigung erzwingen“) testen.

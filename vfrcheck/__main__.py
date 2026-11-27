@@ -10,7 +10,8 @@ import os
 import sys
 from pathlib import Path
 
-from . import assess, chart, gramet, notify, route, section, site, telegram_bot, weather
+from . import airspace, assess, chart, gramet, notify, route, section, site, sun, telegram_bot, weather
+from . import terrain as terrain_mod
 
 STATE_DIR = Path("state")
 ENS_NM = 15  # Abstand der Ensemble-Abfragen
@@ -65,6 +66,15 @@ def leg_lines(legs):
             t += f" | 0 °C {_ft(lg['freezing_ft'])}"
         if lg["icing_ft"]:
             t += f" | ⚠ Vereisung ab {_ft(lg['icing_ft'])}"
+        if lg.get("terrain_ft"):
+            t += f" | Gelände max. {_ft(lg['terrain_ft'])} (±5 NM)"
+        if lg.get("clouds"):
+            b, top, share = lg["clouds"]
+            t += f" | Wolken (ICON) {_ft(b)}–{_ft(top)} auf {share * 100:.0f}% des Abschnitts"
+            if lg.get("on_top_ft"):
+                t += f", on top ab ~{_ft(lg['on_top_ft'])} denkbar"
+        if lg.get("lee"):
+            t += f" | ⚠ Lee-/Rotorturbulenz möglich (Wind Kammhöhe {lg['lee']:.0f} kt)"
         lines.append(t)
     return lines + [""]
 
@@ -88,7 +98,7 @@ def problem_segments(res, legs, threshold=10):
     return lines
 
 
-def report(fl, res, metars, legs=()):
+def report(fl, res, metars, legs=(), notes=()):
     p = res["probability"]
     lines = [f"Flug {fl['name']} – Abflug {fl['departure']:%Y-%m-%d %H:%M} UTC, {fl['cruise_alt_ft']} ft",
              f"VFR-Wahrscheinlichkeit: {p:.0f}% ({category(p)}), {res['members']} Ensemble-Member"
@@ -99,11 +109,42 @@ def report(fl, res, metars, legs=()):
     problems = problem_segments(res, legs)
     if problems:
         lines += ["Mögliche Probleme entlang der Strecke:"] + problems + [""]
+    for title, items in notes:
+        if items:
+            lines += [title] + list(items) + [""]
     for icao, d in metars.items():
         for kind in ("metar", "taf"):
             if d.get(kind):
                 lines.append(d[kind])
     return "\n".join(lines)
+
+
+def optional(what, fn, default):
+    """Zusatzdaten holen; ein Fehler darf die Bewertung nicht abbrechen."""
+    try:
+        return fn()
+    except Exception as e:
+        print(f"{what} nicht verfügbar: {e}")
+        return default
+
+
+ALPS = (45.8, 48.2, 5.8, 16.5)  # lat_min, lat_max, lon_min, lon_max
+
+
+def foehn_notes(fl, points, terrain):
+    """Föhnindex (Druckdifferenz Bozen − Innsbruck), nur für Strecken über den Alpen."""
+    alpine = any(ALPS[0] <= p.lat <= ALPS[1] and ALPS[2] <= p.lon <= ALPS[3] and (t or 0) >= 4000
+                 for p, t in zip(points, terrain))
+    if not alpine:
+        return []
+    dp = optional("Föhnindex", lambda: weather.foehn_dp(points[len(points) // 2].eta), None)
+    if dp is None:
+        return []
+    if dp >= 4:
+        return [f"⚠ Südföhn wahrscheinlich (Δp Bozen–Innsbruck {dp:+.1f} hPa): Turbulenz, Lee-Wellen, Staubewölkung im Süden"]
+    if dp <= -4:
+        return [f"⚠ Nordföhn wahrscheinlich (Δp Bozen–Innsbruck {dp:+.1f} hPa): Turbulenz, Staubewölkung im Norden"]
+    return [f"Föhnindex unauffällig (Δp Bozen–Innsbruck {dp:+.1f} hPa)"]
 
 
 def ensemble_for(points, sec):
@@ -138,13 +179,24 @@ def run(path, args, force=False):
         print(f"Vertikalschnitt nicht verfügbar: {e}")
         sec = None
     profs = section.profiles(points, sec) if sec else [None] * len(points)
-    res = assess.assess(points, ensemble_for(points, sec), fl["minima"])
+    if sec:  # ETAs mit Wind korrigieren, dann Profile zur neuen Zeit neu auslesen
+        route.retime(points, fl, section.point_gs(fl, points, profs))
+        profs = section.profiles(points, sec)
+    courses = [route.course(a, b) for a, b in zip(fl["waypoints"], fl["waypoints"][1:])]
+    terrain = optional("Gelände-Korridor", lambda: terrain_mod.corridor_max(points, courses), [None] * len(points))
+    det_bases = [(section.cloud_layers(pr) or [(None,)])[0][0] if pr is not None else None for pr in profs]
+    res = assess.assess(points, ensemble_for(points, sec), fl["minima"], terrain, det_bases)
     icaos = [w["icao"] for w in fl["waypoints"] if w.get("icao")]
-    legs = section.legs(fl, points, profs)
+    legs = section.legs(fl, points, profs, terrain)
     metars = weather.metar_taf(icaos)
-    text = report(fl, res, metars, legs)
+    ground = [r.get("elev_ft") for r in res["points"]]
+    spaces = optional("Lufträume", lambda: airspace.check_airspaces(fl, points, ground), [])
+    notes = [("Luftraum entlang der Strecke (openAIP):", airspace.airspace_lines(spaces)),
+             ("NOTAMs (autorouter):", optional("NOTAMs", lambda: airspace.notams(fl, points), [])),
+             ("Tageslicht / Föhn:", sun.daylight_notes(points) + foehn_notes(fl, points, terrain))]
+    text = report(fl, res, metars, legs, notes)
     print(text, "\n")
-    png = chart.render(fl, points, res, profs, legs)
+    png = chart.render(fl, points, res, profs, legs, spaces)
     Path("charts").mkdir(exist_ok=True)
     (Path("charts") / f"{Path(path).stem}.png").write_bytes(png)
 
@@ -191,7 +243,7 @@ def run(path, args, force=False):
         state_file.write_text(json.dumps(state))
     return {"stem": Path(path).stem, "fl": fl, "res": res, "legs": legs, "metars": metars, "text": text,
             "png": png, "history": state.get("history", []), "checked": now,
-            "altitudes": altitudes(fl, res)[1:-1], "problems": problem_segments(res, legs)}
+            "altitudes": altitudes(fl, res)[1:-1], "problems": problem_segments(res, legs), "notes": notes}
 
 
 def main():

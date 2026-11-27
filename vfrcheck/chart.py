@@ -3,6 +3,7 @@ import io
 import math
 
 import matplotlib
+import matplotlib.patches
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -22,7 +23,7 @@ def _color(pct):
     return "#2e9d4a" if pct < 20 else "#e8a317" if pct < 50 else "#d62f2f"
 
 
-def render(fl, points, res, profs, legs):
+def render(fl, points, res, profs, legs, spaces=()):
     x = np.array([p.dist for p in points])
     elev = np.array([r.get("elev_ft", 0) for r in res["points"]])
     ymax = max(10000, max(p.alt_ft for p in points) + 4000)
@@ -62,7 +63,17 @@ def render(fl, points, res, profs, legs):
     for r, xi in zip(res["points"], x):
         if r["fail_pct"] and r["fail_pct"] >= 20:
             ax.axvspan(xi - 2.5, xi + 2.5, color=_color(r["fail_pct"]), alpha=0.12, lw=0)
-    ax.fill_between(x, 0, elev, color="#8b6b43", zorder=4, label="Gelände (Stützpunkte)")
+    ter = np.array([r.get("terrain_ft") or np.nan for r in res["points"]], dtype=float)
+    if not np.isnan(ter).all():
+        ax.fill_between(x, 0, ter, color="#c9a97a", zorder=3, label="Gelände max. ±5 NM")
+    ax.fill_between(x, 0, elev, color="#8b6b43", zorder=4, label="Gelände (Strecke)")
+    for sp in spaces:  # Lufträume als Rechteck auf ihrer Höhe
+        hi = min(sp["hi"], ymax)
+        col = "#d62f2f" if sp["type"] in ("R", "D", "P", "TRA", "TSA") else "#1f6fd1"
+        ax.add_patch(matplotlib.patches.Rectangle((sp["from"], sp["lo"]), max(sp["to"] - sp["from"], 0.5),
+                                                  hi - sp["lo"], fill=False, ec=col, lw=1.2, ls="-", zorder=8))
+        ax.text(sp["from"] + 0.5, min(hi, ymax * 0.93) - 150, f"{sp['type']} {sp['name']}"[:28], fontsize=7,
+                color=col, va="top", zorder=8)
     ax.step(x, [p.alt_ft for p in points], where="pre", color="black", lw=2, label="geplante Höhe", zorder=7)
     ax.set_ylim(0, ymax)
     ax.set_ylabel("ft MSL")
@@ -75,8 +86,8 @@ def render(fl, points, res, profs, legs):
     top = ax.secondary_xaxis("top")
     wp = [pt for pt in points if pt.waypoint]
     top.set_xticks([pt.dist for pt in wp], [pt.name for pt in wp], fontsize=9)
-    starts = [0.0] + [pt.dist for pt in wp][:-1]
-    for lg, x0, pt in zip(legs, starts, wp):
+    for lg, a, pt in zip(legs, wp, wp[1:]):
+        x0 = a.dist
         if lg["wind"]:
             ax.text((x0 + pt.dist) / 2, ymax * 0.97, f"{lg['wind'][0]:03.0f}°/{lg['wind'][1]:.0f} kt\nGS {lg['gs']:.0f}",
                     ha="center", va="top", fontsize=8, color="#5a3d8a",

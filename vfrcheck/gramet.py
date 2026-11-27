@@ -12,16 +12,30 @@ def _coord(w):
             f"{int(abs(lon)):03d}{int(abs(lon) % 1 * 60):02d}{'E' if lon >= 0 else 'W'}")
 
 
-def fetch(fl, points):
+_token = None
+
+
+def auth_header():
+    """Bearer-Header für die autorouter-API (Token pro Lauf wiederverwendet), None ohne Zugangsdaten."""
+    global _token
     user, pw = os.environ.get("AUTOROUTER_USER"), os.environ.get("AUTOROUTER_PASS")
     if not (user and pw):
         return None
-    try:
-        tok = requests.post(f"{API}/oauth2/token", data={
+    if _token is None:
+        r = requests.post(f"{API}/oauth2/token", data={
             "grant_type": "client_credentials", "client_id": user, "client_secret": pw}, timeout=30)
-        tok.raise_for_status()
+        r.raise_for_status()
+        _token = r.json()["access_token"]
+    return {"Authorization": f"Bearer {_token}"}
+
+
+def fetch(fl, points):
+    try:
+        headers = auth_header()
+        if not headers:
+            return None
         eet = int((points[-1].eta - points[0].eta).total_seconds())
-        r = requests.get(f"{API}/met/gramet", headers={"Authorization": f"Bearer {tok.json()['access_token']}"},
+        r = requests.get(f"{API}/met/gramet", headers=headers,
                          params={"waypoints": " ".join(w.get("icao") or _coord(w) for w in fl["waypoints"]),
                                  "altitude": fl["cruise_alt_ft"], "departuretime": int(fl["departure"].timestamp()),
                                  "totaleet": eet, "format": "png"}, timeout=90)

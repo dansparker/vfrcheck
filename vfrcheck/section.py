@@ -9,6 +9,10 @@ from .weather import LEVELS
 
 ICING_CLOUD = 50        # % Bewölkung auf der Druckfläche
 ICING_T = (-10, 0)      # °C
+LAYER_CLOUD = 50        # % Bedeckung auf einer Druckfläche, ab der sie als Wolkenschicht zählt
+ON_TOP_MAX_FT = 10000   # VFR on top nur vorschlagen, wenn die Tops darunter liegen
+LEE_WIND_KT = 25        # Wind auf Kammhöhe, ab dem Lee-/Rotorturbulenz gemeldet wird
+MOUNTAIN_FT = 3000      # Gelände, ab dem ein Abschnitt als Gebirge gilt
 
 
 def profiles(points, data):
@@ -23,7 +27,8 @@ def profiles(points, data):
         g = lambda v: [(h.get(f"{v}_{l}hPa") or [None] * (i + 1))[i] for l in LEVELS]
         z = np.array(g("geopotential_height"), dtype=float) * M_TO_FT
         fl = (h.get("freezing_level_height") or [None] * (i + 1))[i]
-        out.append({"z": z, "cloud": np.array(g("cloud_cover"), dtype=float),
+        elev = d.get("elevation")
+        out.append({"elev_ft": elev * M_TO_FT if elev is not None else None, "z": z, "cloud": np.array(g("cloud_cover"), dtype=float),
                     "temp": np.array(g("temperature"), dtype=float),
                     "ws": np.array(g("wind_speed"), dtype=float), "wd": np.array(g("wind_direction"), dtype=float),
                     "freezing_ft": fl * M_TO_FT if fl is not None else None})
@@ -47,17 +52,53 @@ def wind_at(prof, alt_ft):
     return uu, vv
 
 
+def cloud_layers(prof, thresh=LAYER_CLOUD):
+    """Wolkenschichten [(Basis, Top, max. Bedeckung)] in ft MSL aus den Druckflächen (nur über Grund)."""
+    o = np.argsort(prof["z"])
+    z, c = prof["z"][o], prof["cloud"][o]
+    ground = prof.get("elev_ft") or 0
+    layers = []
+    for i in range(len(z)):
+        if np.isnan(z[i]) or np.isnan(c[i]) or z[i] < ground or c[i] < thresh:
+            continue
+        lo = max(ground, (z[i] + z[i - 1]) / 2) if i > 0 else z[i]
+        hi = (z[i] + z[i + 1]) / 2 if i < len(z) - 1 else z[i]
+        if layers and lo <= layers[-1][1] + 1:
+            layers[-1] = [layers[-1][0], hi, max(layers[-1][2], c[i])]
+        else:
+            layers.append([lo, hi, c[i]])
+    return [tuple(l) for l in layers]
+
+
+def point_gs(fl, points, profs):
+    """Groundspeed je Stützpunkt aus Wind auf Planhöhe (mit Vorhaltewinkel); TAS wenn keine Daten."""
+    courses = [course(a, b) for a, b in zip(fl["waypoints"], fl["waypoints"][1:])]
+    tas, out = fl["tas_kt"], []
+    for p, pr in zip(points, profs):
+        w = wind_at(pr, p.alt_ft) if pr is not None else None
+        if w is None:
+            out.append(tas)
+            continue
+        c = math.radians(courses[p.leg])
+        along = w[0] * math.sin(c) + w[1] * math.cos(c)    # Rückenwindanteil
+        cross = w[0] * math.cos(c) - w[1] * math.sin(c)
+        out.append(math.sqrt(max(tas ** 2 - cross ** 2, 0)) + along)
+    return out
+
+
 def icing_levels(prof):
     """Höhen (ft) mit Vereisungsgefahr: Wolken + Temperatur zwischen -10 und 0 °C."""
     m = (prof["cloud"] >= ICING_CLOUD) & (prof["temp"] >= ICING_T[0]) & (prof["temp"] <= ICING_T[1])
     return prof["z"][m]
 
 
-def legs(fl, points, profs):
-    """Zusammenfassung pro Streckenabschnitt: Wind auf Planhöhe, Gegen-/Seitenwind, GS, Vereisung."""
+def legs(fl, points, profs, terrain=None):
+    """Zusammenfassung pro Streckenabschnitt: Wind, GS, Wolkenschichten, Vereisung, Gelände, Lee-Turbulenz."""
     wps, out = fl["waypoints"], []
+    terrain = terrain or [None] * len(points)
     for k, (a, b) in enumerate(zip(wps, wps[1:])):
         sel = [(p, pr) for p, pr in zip(points, profs) if p.leg == k and pr is not None]
+        ter = [t for p, t in zip(points, terrain) if p.leg == k and t is not None]
         uv = [w for p, pr in sel if (w := wind_at(pr, p.alt_ft)) is not None]
         leg = {"name": f"{a['name']}→{b['name']}", "dist": dist_nm(a, b), "course": course(a, b),
                "alt": b["alt_ft"], "wind": None}
@@ -75,5 +116,19 @@ def legs(fl, points, profs):
         leg["icing_ft"] = min(ice) if ice else None
         frz = [pr["freezing_ft"] for _, pr in sel if pr["freezing_ft"] is not None]
         leg["freezing_ft"] = min(frz) if frz else None
+        # Wolkenschichten (ICON): tiefste Basis, höchstes Top der untersten Schicht, Anteil bedeckter Punkte
+        low = [cloud_layers(pr)[0] for _, pr in sel if cloud_layers(pr)]
+        leg["clouds"] = (min(l[0] for l in low), max(l[1] for l in low), len(low) / len(sel)) if low else None
+        if low and len(low) == len(sel) and leg["clouds"][1] + 1000 <= ON_TOP_MAX_FT:
+            leg["on_top_ft"] = leg["clouds"][1] + 1000
+        else:
+            leg["on_top_ft"] = None
+        leg["terrain_ft"] = max(ter) if ter else None
+        # Lee-/Rotorturbulenz: starker Wind auf Kammhöhe über Gebirge
+        leg["lee"] = None
+        if leg["terrain_ft"] and leg["terrain_ft"] >= MOUNTAIN_FT:
+            crest = [math.hypot(*w) for p, pr in sel if (w := wind_at(pr, leg["terrain_ft"])) is not None]
+            if crest and max(crest) >= LEE_WIND_KT:
+                leg["lee"] = max(crest)
         out.append(leg)
     return out

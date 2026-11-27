@@ -27,6 +27,11 @@ def _spark(history):
             f'<div class="muted small">Verlauf seit {history[0][0][5:16].replace("T", " ")} UTC</div>')
 
 
+def _h(ft):
+    """ft auf 100 gerundet oder '–'."""
+    return "–" if ft is None else f"{round(ft / 100) * 100:.0f}"
+
+
 def _card(r):
     fl, res = r["fl"], r["res"]
     p = res["probability"]
@@ -40,11 +45,18 @@ def _card(r):
         + (f"<td>{lg['wind'][0]:03.0f}°/{lg['wind'][1]:.0f}</td>"
            f"<td>{'Gegen' if lg['head'] >= 0 else 'Rücken'} {abs(lg['head']):.0f} · {abs(lg['cross']):.0f} v. {'re' if lg['cross'] >= 0 else 'li'}</td>"
            f"<td>{lg['gs']:.0f}</td><td>{lg['ete_min']:.0f}</td>" if lg["wind"] else "<td colspan=4>–</td>")
-        + f"<td>{(str(round(lg['freezing_ft'] / 100) * 100)) if lg['freezing_ft'] else '–'}"
-          f"{' <b class=warn>⚠ Eis ab ' + str(round(lg['icing_ft'] / 100) * 100) + '</b>' if lg['icing_ft'] else ''}</td></tr>"
+        + f"<td>{_h(lg['freezing_ft'])}"
+          f"{' <b class=warn>⚠ Eis ab ' + _h(lg['icing_ft']) + '</b>' if lg['icing_ft'] else ''}</td>"
+        + f"<td>{_h(lg.get('terrain_ft'))}</td>"
+        + f"<td>{_h(lg['clouds'][0]) + '–' + _h(lg['clouds'][1]) + ' (' + str(round(lg['clouds'][2] * 100)) + '%)' if lg.get('clouds') else '–'}"
+          f"{' · on top ab ' + _h(lg['on_top_ft']) if lg.get('on_top_ft') else ''}"
+          f"{' <b class=warn>⚠ Lee ' + str(round(lg['lee'])) + ' kt</b>' if lg.get('lee') else ''}</td></tr>"
         for lg in r["legs"])
     probs = "".join(f"<li>{e(x[2:])}</li>" for x in r["problems"]) or "<li class=muted>keine auffälligen Stellen</li>"
     alts = "".join(f"<li>{e(x.strip(' -·'))}</li>" for x in r["altitudes"])
+    notes = "".join(f"<section><h3>{e(title.rstrip(':'))}</h3><ul>"
+                    + "".join(f"<li{' class=warn' if '⚠' in x else ''}>{e(x.lstrip('- '))}</li>" for x in items)
+                    + "</ul></section>" for title, items in r.get("notes", []) if items)
     wx = "".join(f"<pre>{e(d[k])}</pre>" for d in r["metars"].values() for k in ("metar", "taf") if d.get(k))
     return f"""
 <article class="card" id="{e(r['stem'])}">
@@ -63,9 +75,10 @@ def _card(r):
     <section><h3>Mögliche Flughöhen</h3><ul>{alts or '<li class=muted>–</li>'}</ul></section>
     <section><h3>Problemstellen</h3><ul>{probs}</ul></section>
   </div>
+  {notes}
   <h3>Streckenabschnitte</h3>
   <div class="scroll"><table>
-    <thead><tr><th>Abschnitt</th><th>NM</th><th>Kurs</th><th>ft</th><th>Wind kt</th><th>Gegen-/Rücken · Seite</th><th>GS</th><th>min</th><th>0 °C ft</th></tr></thead>
+    <thead><tr><th>Abschnitt</th><th>NM</th><th>Kurs</th><th>ft</th><th>Wind kt</th><th>Gegen-/Rücken · Seite</th><th>GS</th><th>min</th><th>0 °C ft</th><th>Gelände max</th><th>Wolken (ICON)</th></tr></thead>
     <tbody>{legs}</tbody>
   </table></div>
   <h3>Querschnitt</h3>
