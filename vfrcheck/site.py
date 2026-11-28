@@ -142,7 +142,7 @@ FORM = r"""
     <label>Name <input name="name" placeholder="LOWW-LOWG" required></label>
     <label>Abflug (UTC) <input name="dep" type="datetime-local" required></label>
     <label>Höhe ft <input name="alt" type="number" value="4500" step="500" required></label>
-    <label>TAS kt <input name="tas" type="number" placeholder="aus Flugzeugprofil"></label>
+    <label>TAS kt <input name="tas" type="number" placeholder="100 bzw. aus Flugzeugprofil"></label>
     <label>Flugzeug (Kennzeichen) <input name="aircraft" placeholder="D-EABC, optional" pattern="[A-Za-z]{1,2}-[A-Za-z0-9]{2,5}"></label>
     <label>Ausweichplatz <input name="alternate" placeholder="ICAO, optional" pattern="[A-Za-z]{2}[A-Za-z0-9]{2}"></label>
     <label class="wide"><span>Route – ein Wegpunkt pro Zeile: ICAO oder <code>lat,lon</code> oder <code>lat,lon,Name,Höhe</code></span>
@@ -175,7 +175,7 @@ FORM = r"""
       <input name="token" type="password" autocomplete="off" placeholder="github_pat_…"></label>
     <p class="muted small wide">Das Token wird nur in diesem Browser gespeichert und nur an api.github.com gesendet.
       Es ist nötig, um Flüge von hier aus anzulegen, zu prüfen und zu löschen.</p>
-    <div class="wide row2"><button type="submit">Speichern</button><button type="button" class="ghost" id="forget">Token entfernen</button></div>
+    <div class="wide row2"><button type="submit">Speichern</button><button type="button" class="ghost" id="testtoken">Token prüfen</button><button type="button" class="ghost" id="forget">Token entfernen</button></div>
   </form>
 </dialog>
 
@@ -188,7 +188,9 @@ const getToken = () => { try { return localStorage.getItem(KEY) || ''; } catch (
 const setToken = t => { try { t ? localStorage.setItem(KEY, t) : localStorage.removeItem(KEY); } catch (e) {} };
 
 function toast(msg, ok = true) {
-  const t = $('#toast'); t.textContent = msg; t.className = ok ? 'ok' : 'err'; t.hidden = false;
+  // Ein offener Dialog liegt in der obersten Ebene – die Meldung muss in den Dialog, sonst ist sie verdeckt
+  const t = $('#toast'); (document.querySelector('dialog[open]') || document.body).appendChild(t);
+  t.textContent = msg; t.className = ok ? 'ok' : 'err'; t.hidden = false;
   clearTimeout(t._h); t._h = setTimeout(() => t.hidden = true, 8000);
 }
 
@@ -198,7 +200,15 @@ async function gh(path, opts = {}) {
   const r = await fetch(`https://api.github.com/repos/${REPO}${path}`, {...opts,
     headers: {Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json'}});
   if (r.status === 404 && opts.method === undefined) return null;
-  if (!r.ok) throw new Error(`GitHub ${r.status}: ${(await r.json().catch(() => ({}))).message || ''}`);
+  if (!r.ok) {
+    const msg = (await r.json().catch(() => ({}))).message || '';
+    const hint = {401: 'Token ungültig oder abgelaufen – unter ⚙ neu eintragen.',
+                  403: 'Token hat keine Schreibrechte: Fine-grained Token mit Zugriff auf dieses Repo und „Contents: Read and write“ nötig.',
+                  404: 'Repo nicht gefunden – das Token muss Zugriff auf ' + REPO + ' haben.',
+                  409: 'Konflikt beim Speichern – bitte nochmals versuchen.',
+                  422: 'GitHub hat die Daten abgelehnt.'}[r.status] || '';
+    throw new Error(`GitHub ${r.status}: ${hint || msg}`);
+  }
   return r.status === 204 ? null : r.json();
 }
 
@@ -249,7 +259,7 @@ $('#f').addEventListener('submit', async ev => {
   const known = ['name', 'departure', 'tas_kt', 'cruise_alt_ft', 'route', 'gpx', 'route_file', 'minima', 'performance',
                  'aircraft', 'alternate'];
   const ext = gpx ? gpx.name.slice(gpx.name.lastIndexOf('.')).toLowerCase() : '';
-  if (!d.tas && !d.aircraft) { toast('TAS oder Flugzeug angeben.', false); return; }
+  if (!d.tas && !d.aircraft) d.tas = '100';  // Standard-TAS, wenn weder TAS noch Flugzeug angegeben
   const extras = Object.entries(old || {}).filter(([k]) => !known.includes(k)).map(([k, v]) => `${k}: ${JSON.stringify(v)}`);
   const yaml = [`name: ${d.name}`, `departure: ${d.dep}:00Z   # UTC`, `cruise_alt_ft: ${d.alt}`,
     ...(d.tas ? [`tas_kt: ${d.tas}`] : []),
@@ -274,6 +284,11 @@ $('#s').addEventListener('submit', ev => {
   setToken(ev.target.token.value.trim()); toast('Token gespeichert.');
 });
 $('#forget').addEventListener('click', () => { setToken(''); $('#s').token.value = ''; toast('Token entfernt.'); });
+$('#testtoken').addEventListener('click', async () => {
+  const v = $('#s').token.value.trim(); if (v) setToken(v);
+  try { await gh('/contents/flights'); toast('Token gültig – Zugriff auf ' + REPO + ' ok.'); }
+  catch (e) { toast(e.message, false); }
+});
 function resetForm() {
   const f = $('#f'); f.reset(); f._raw = null; f._stem = null;
   $('#f-title').textContent = 'Neuer Flug'; $('#f-submit').textContent = 'Flug anlegen und prüfen'; $('#gpx-keep').hidden = true;
