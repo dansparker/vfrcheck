@@ -23,17 +23,22 @@ CHUNK = 25  # Orte pro Anfrage
 WINDOWS = [(-4, 4), (23, 25)]
 
 
-def _request(url, params):
-    """GET mit einer Wiederholung bei Limit (429) oder Zeitüberschreitung."""
-    for attempt in range(2):
+RETRY_WAIT_S = [10, 30]  # Pausen vor dem 2. und 3. Versuch bei Serverfehler/Timeout
+
+
+def _request(url, params, timeout=90):
+    """GET mit Wiederholungen: bei Limit (429) 65 s warten, bei Serverfehler (5xx) oder Timeout bis zu 3 Versuche."""
+    for attempt in range(len(RETRY_WAIT_S) + 1):
+        last = attempt == len(RETRY_WAIT_S)
         try:
-            r = requests.get(url, params=params, timeout=90)
-        except requests.Timeout:
-            if attempt:
+            r = requests.get(url, params=params, timeout=timeout)
+        except (requests.Timeout, requests.ConnectionError):
+            if last:
                 raise
+            time.sleep(RETRY_WAIT_S[attempt])
             continue
-        if r.status_code == 429 and not attempt:
-            time.sleep(65)
+        if not last and (r.status_code == 429 or r.status_code >= 500):
+            time.sleep(65 if r.status_code == 429 else RETRY_WAIT_S[attempt])
             continue
         r.raise_for_status()
         return r.json()

@@ -126,6 +126,14 @@ def report(fl, res, metars, legs=(), notes=()):
     return "\n".join(lines)
 
 
+def _degraded(path):
+    st = STATE_DIR / f"{Path(path).stem}.json"
+    try:
+        return json.loads(st.read_text()).get("degraded", False) if st.exists() else False
+    except ValueError:
+        return False
+
+
 def optional(what, fn, default):
     """Zusatzdaten holen; ein Fehler darf die Bewertung nicht abbrechen."""
     try:
@@ -335,6 +343,7 @@ def run(path, args, force=False):
         subj = f"VFR {fl['name']}: {p:.0f}% {category(p)} ({reason})" if p is not None else f"VFR {fl['name']}"
         print("Gesendet über:", notify.send(subj, text, images()) or "keinen Kanal (nicht konfiguriert)")
     state = dict(old)
+    state["degraded"] = not sec  # ICON fehlte -> beim nächsten 10-min-Takt erneut prüfen
     if p is not None and sec:
         station = lambda w: (metars.get(w.get("icao"), {}).get("near", (None,))[0]
                              if not metars.get(w.get("icao"), {}).get("metar") else w.get("icao"))
@@ -399,8 +408,9 @@ def main():
         if hourly and not args.dry_run:
             STATE_DIR.mkdir(exist_ok=True)
             last.write_text(now.isoformat())
-        if not hourly:
-            files = [f for f in files if str(Path(f)) in {str(Path(x)) for x in created | forced}]
+        if not hourly:  # zwischen den Stundenläufen: neue/angeforderte Flüge und solche mit fehlenden ICON-Daten
+            wanted = {str(Path(x)) for x in created | forced}
+            files = [f for f in files if str(Path(f)) in wanted or _degraded(f)]
     summary, results = [], []
     full = bool(args.files) or hourly
     for f in files:

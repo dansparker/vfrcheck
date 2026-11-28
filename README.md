@@ -108,6 +108,14 @@ python -m vfrcheck --dry-run                   # alle Flüge, nichts senden
 python -m vfrcheck flights/mein-flug.yaml --force-notify
 ```
 
+## Tests
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+python -m pytest -q tests
+```
+Die Tests laufen ohne Netzwerk und werden bei jeder Codeänderung automatisch auf GitHub ausgeführt (Workflow `tests`).
+
 ## Grenzen und Haftung
 
 - Die Wolkenbasis wird aus der Taupunktdifferenz am Boden geschätzt. Inversionen und Hochnebel können dabei unterschätzt werden. Die ETA wird ohne Windkorrektur berechnet.

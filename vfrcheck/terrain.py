@@ -2,10 +2,9 @@
 import hashlib
 import json
 import math
-import time
 from pathlib import Path
 
-import requests
+from .weather import _request
 
 URL = "https://api.open-meteo.com/v1/elevation"
 M_TO_FT = 3.28084
@@ -56,13 +55,9 @@ def _corridor_max(points, courses):
     elev = []
     for j in range(0, len(flat), 100):  # max. 100 Koordinaten pro Anfrage
         part = flat[j:j + 100]
-        r = requests.get(URL, params={"latitude": ",".join(f"{a:.4f}" for a, _ in part),
-                                      "longitude": ",".join(f"{b:.4f}" for _, b in part)}, timeout=60)
-        if r.status_code == 429:  # Open-Meteo-Limit: einmal warten und wiederholen
-            time.sleep(65)
-            r = requests.get(r.url, timeout=60)
-        r.raise_for_status()
-        elev += r.json()["elevation"]
+        data = _request(URL, {"latitude": ",".join(f"{a:.4f}" for a, _ in part),
+                              "longitude": ",".join(f"{b:.4f}" for _, b in part)}, timeout=60)
+        elev += data["elevation"]
     out, k = {"max": [], "track": [], "point": []}, 0
     per_center = 1 + 2 * CROSS_STEPS  # Mittelpunkt + Querpunkte; Mittelpunkte liegen auf der Kurslinie
     for row in rows:
