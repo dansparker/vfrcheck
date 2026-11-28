@@ -1,0 +1,13 @@
+[
+ {
+  "flight": "20261128-1410-loih-ednl",
+  "name": "loih-ednl",
+  "departure": "2026-11-28T14:10:00+00:00",
+  "forecast": 64,
+  "observed_vfr": true,
+  "metars": [
+   "METAR LSZR 281420Z VRB02KT CAVOK 03/M04 Q1026",
+   "METAR EDJA 281420Z 07010KT 9999 BKN016 M00/M03 Q1026"
+  ]
+ }
+]
