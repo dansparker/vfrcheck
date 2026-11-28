@@ -4,7 +4,7 @@ cruise_alt_ft: 4500
 tas_kt: 100
 route:
   - LOIH
-  - EDNL
+  - LOWG
 minima:
   vis_m: 5000
   ceiling_ft_agl: 1500
